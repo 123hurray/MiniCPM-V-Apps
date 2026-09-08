@@ -17,7 +17,7 @@ Pre-built apps for **iOS**, **Android**, and **HarmonyOS** are listed below. All
 | Platform | Latest | Package | Size | Min OS | Recommended RAM |
 | --- | --- | --- | --- | --- | --- |
 | 🍎 **iOS / iPadOS** | [TestFlight (rolling)](https://testflight.apple.com/join/yNKyFZwW) | — | — | iOS / iPadOS 16+ | ≥ 6 GB |
-| 🤖 **Android** | [v2.3](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) | APK | ~21 MB | Android 8.0 (API 26)+ | ≥ 6 GB |
+| 🤖 **Android** | [v2.5](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) | APK | ~20 MB | Android 8.0 (API 26)+ | ≥ 6 GB |
 | 📱 **HarmonyOS** | [v2.3](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) | HAP | ~31 MB | HarmonyOS API 12+ | ≥ 6 GB |
 
 All packages target **64-bit ARM** (`arm64-v8a`).
@@ -46,11 +46,11 @@ All packages target **64-bit ARM** (`arm64-v8a`).
 
 ## 🤖 Android — APK
 
-**Latest release:** [**v2.3**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) &nbsp;|&nbsp; [Download APK](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.3/MiniCPM-V-demo-Android-v2.3.apk)
+**Latest release:** [**v2.5**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) &nbsp;|&nbsp; [Download APK](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.5/MiniCPM-V-demo-Android-v2.5.apk)
 
 | File | Size | MD5 |
 | --- | --- | --- |
-| `MiniCPM-V-demo-Android-v2.3.apk` | ~21 MB | `667da8e03b98b6adf88004695d9567dc` |
+| `MiniCPM-V-demo-Android-v2.5.apk` | ~20 MB | `b25150612fefe253859324e91716fc81` |
 
 ### Requirements
 

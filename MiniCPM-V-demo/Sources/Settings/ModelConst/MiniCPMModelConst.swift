@@ -195,20 +195,21 @@ struct MiniCPMModelConst {
 
     // MARK: - MiniCPM5 纯文本模型（2B）
 
-    /// MiniCPM5-2B 主模型文件名。当前走 OBS 直链（尚未上架官方 HF / ModelScope）。
+    /// MiniCPM5-2B 主模型文件名（对齐 HF / ModelScope 官方命名）。
     static let modelv526_FileName = "MiniCPM5-2B-Q4_K_M.gguf"
 
     /// MiniCPM5-2B 显示名
     static let modelv526_DisplayedName = "MiniCPM5-2B LLM INT4"
 
-    /// MiniCPM5-2B 主模型下载地址（华为云 OBS）
-    static let modelv526_URLString = "https://data-transfer-huawei.obs.cn-north-4.myhuaweicloud.com/MiniCPM5-2B-Q4_K_M.gguf"
+    /// MiniCPM5-2B 主模型下载地址（HuggingFace 主源，对齐 1B / v4.6）
+    static let modelv526_URLString = "https://huggingface.co/openbmb/MiniCPM5-2B-GGUF/resolve/main/MiniCPM5-2B-Q4_K_M.gguf"
 
-    /// MiniCPM5-2B 备用下载地址（与主源相同，待官方 HF / MS 上架后再拆）
-    static let modelv526_BackUpURLString = "https://data-transfer-huawei.obs.cn-north-4.myhuaweicloud.com/MiniCPM5-2B-Q4_K_M.gguf"
+    /// MiniCPM5-2B 备用下载地址（ModelScope 国内镜像）
+    static let modelv526_BackUpURLString = "https://modelscope.cn/api/v1/models/OpenBMB/MiniCPM5-2B-GGUF/repo?Revision=master&FilePath=MiniCPM5-2B-Q4_K_M.gguf"
 
-    /// MiniCPM5-2B 主模型 MD5（本地 Q4_K_M，1484 MiB）
-    static let modelv526_MD5 = "4e1a8117d05ca3fd3b6d9f77fd661601"
+    /// Official HF / ModelScope Q4_K_M size (LFS sha256=ec2d5801..).
+    /// OBS pre-release copy was 1561318208 bytes; size mismatch triggers re-download.
+    static let modelv526_ExpectedSize: Int64 = 1_561_318_368
 
 
     // MARK: - MiniCPM-V 4.6 ANE 模块

@@ -213,12 +213,12 @@ cd MiniCPM-V-demo-Android
 
 ### 2.5 MiniCPM5-2B GGUF 模型文件（纯文本）
 
-Llama 架构 2B 纯文本权重（Q4_K_M，约 1.5 GB）。官方 HF / ModelScope GGUF 仓库尚未上架，demo 目前从 OBS 中转桶拉取：
+#### 下载官方 GGUF 文件
 
-* OBS: `https://data-transfer-huawei.obs.cn-north-4.myhuaweicloud.com/MiniCPM5-2B-Q4_K_M.gguf`
-* MD5: `4e1a8117d05ca3fd3b6d9f77fd661601`
+* HuggingFace: [https://huggingface.co/openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)
+* ModelScope: [https://modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF](https://modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF)
 
-不需要 `mmproj`。
+请从仓库下载语言模型文件（例如 `MiniCPM5-2B-Q4_K_M.gguf`）。MiniCPM5 为纯文本模型，不需要 `mmproj`。
 
 ### 2.6 VoxCPM2 GGUF 模型文件（语音合成）
 

@@ -189,23 +189,17 @@ class MBV526ModelDownloadManager: NSObject {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let checksum = MBUtils.md5(for: fileURL)
+            let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? -1
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                if let checksum = checksum {
-                    debugLog("-->> V526 主模型 实际 MD5: \(checksum)")
-                    debugLog("-->> V526 主模型 期望 MD5: \(MiniCPMModelConst.modelv526_MD5)")
-                    if checksum == MiniCPMModelConst.modelv526_MD5 {
-                        debugLog("-->> V526 主模型 MD5 校验成功")
-                        self.modelv526_Manager?.status = "downloaded"
-                        self.setDownloadStatus(.completed, for: "v526_main_model")
-                    } else {
-                        debugLog("-->> V526 主模型 MD5 校验失败")
-                        self.modelv526_Manager?.status = "download"
-                        self.deleteModelv526()
-                    }
+                debugLog("-->> V526 主模型 实际大小: \(size)")
+                debugLog("-->> V526 主模型 期望大小: \(MiniCPMModelConst.modelv526_ExpectedSize)")
+                if size == MiniCPMModelConst.modelv526_ExpectedSize {
+                    debugLog("-->> V526 主模型大小校验成功")
+                    self.modelv526_Manager?.status = "downloaded"
+                    self.setDownloadStatus(.completed, for: "v526_main_model")
                 } else {
-                    debugLog("-->> V526 主模型 MD5 计算失败")
+                    debugLog("-->> V526 主模型大小校验失败")
                     self.modelv526_Manager?.status = "download"
                     self.deleteModelv526()
                 }

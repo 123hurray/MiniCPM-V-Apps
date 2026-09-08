@@ -17,7 +17,7 @@
 | 平台 | 最新版本 | 安装包 | 大小 | 系统要求 | 推荐内存 |
 | --- | --- | --- | --- | --- | --- |
 | 🍎 **iOS / iPadOS** | [TestFlight（滚动更新）](https://testflight.apple.com/join/yNKyFZwW) | — | — | iOS / iPadOS 16+ | ≥ 6 GB |
-| 🤖 **安卓** | [v2.3](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) | APK | ~21 MB | 安卓 8.0 (API 26)+ | ≥ 6 GB |
+| 🤖 **安卓** | [v2.5](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) | APK | ~20 MB | 安卓 8.0 (API 26)+ | ≥ 6 GB |
 | 📱 **鸿蒙** | [v2.3](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) | HAP | ~31 MB | 鸿蒙 API 12+ | ≥ 6 GB |
 
 所有安装包均面向 **64 位 ARM** 架构（`arm64-v8a`）。
@@ -46,11 +46,11 @@
 
 ## 🤖 安卓 — APK
 
-**最新版本：** [**v2.3**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) &nbsp;|&nbsp; [下载 APK](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.3/MiniCPM-V-demo-Android-v2.3.apk)
+**最新版本：** [**v2.5**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) &nbsp;|&nbsp; [下载 APK](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.5/MiniCPM-V-demo-Android-v2.5.apk)
 
 | 文件 | 大小 | MD5 |
 | --- | --- | --- |
-| `MiniCPM-V-demo-Android-v2.3.apk` | ~21 MB | `667da8e03b98b6adf88004695d9567dc` |
+| `MiniCPM-V-demo-Android-v2.5.apk` | ~20 MB | `b25150612fefe253859324e91716fc81` |
 
 ### 系统要求
 

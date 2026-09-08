@@ -145,16 +145,18 @@ data class ModelInfo(
                 // No MD5 here on purpose: HF / ModelScope serve via git-LFS
                 // which already provides hash-based integrity checks.
             ),
-            // MiniCPM5-2B: Llama-arch text-only soup. Official HF / MS GGUF
-            // repos are not published yet, so the demo pulls from the OBS
-            // transfer bucket (same topology as the VoxCPM2 temporary mirror).
+            // MiniCPM5-2B: text-only, same HF + ModelScope race as 1B now
+            // that the official GGUF repos are public. No MD5 on purpose:
+            // git-LFS already hashes the object. The pre-release OBS copy
+            // is 160 bytes smaller than the published Q4_K_M; downloadFile
+            // will replace it when the user taps Download again.
             ModelInfo(
                 id = "minicpm5-2b",
                 displayName = "MiniCPM5-2B (Q4_K_M)",
                 descriptionResName = "model_desc_minicpm5_2b",
                 ggufFileName = "MiniCPM5-2B-Q4_K_M.gguf",
-                directGgufUrl = "https://data-transfer-huawei.obs.cn-north-4.myhuaweicloud.com/MiniCPM5-2B-Q4_K_M.gguf",
-                ggufMd5 = "4e1a8117d05ca3fd3b6d9f77fd661601"
+                hfRepo = "openbmb/MiniCPM5-2B-GGUF",
+                msRepo = "OpenBMB/MiniCPM5-2B-GGUF"
             ),
             // VoxCPM2 — text-to-speech model, ~2B params, 48kHz output.
             // Two GGUF files: a BaseLM (the MiniCPM-4 based language model)

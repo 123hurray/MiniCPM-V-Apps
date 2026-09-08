@@ -213,12 +213,12 @@ Download the language model file (e.g., `MiniCPM5-1B-Q4_K_M.gguf`) from the repo
 
 ### 2.5 MiniCPM5-2B GGUF Files (text-only)
 
-Llama-architecture 2B text-only checkpoint (Q4_K_M, ~1.5 GB). Official HF / ModelScope GGUF repos are not published yet; the demo currently fetches from the OBS transfer bucket:
+#### Download Official GGUF Files
 
-* OBS: `https://data-transfer-huawei.obs.cn-north-4.myhuaweicloud.com/MiniCPM5-2B-Q4_K_M.gguf`
-* MD5: `4e1a8117d05ca3fd3b6d9f77fd661601`
+* HuggingFace: [https://huggingface.co/openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)
+* ModelScope: [https://modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF](https://modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF)
 
-No `mmproj` is required.
+Download the language model file (e.g., `MiniCPM5-2B-Q4_K_M.gguf`) from the repository. MiniCPM5 is text-only, so no `mmproj` is required.
 
 ### 2.6 VoxCPM2 GGUF Files (text-to-speech)
 
