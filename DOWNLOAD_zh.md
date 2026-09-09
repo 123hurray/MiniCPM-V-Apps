@@ -18,7 +18,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 🍎 **iOS / iPadOS** | [TestFlight（滚动更新）](https://testflight.apple.com/join/yNKyFZwW) | — | — | iOS / iPadOS 16+ | ≥ 6 GB |
 | 🤖 **安卓** | [v2.5](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) | APK | ~20 MB | 安卓 8.0 (API 26)+ | ≥ 6 GB |
-| 📱 **鸿蒙** | [v2.3](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) | HAP | ~31 MB | 鸿蒙 API 12+ | ≥ 6 GB |
+| 📱 **鸿蒙** | [v2.5](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) | HAP | ~36 MB | 鸿蒙 API 12+ | ≥ 6 GB |
 
 所有安装包均面向 **64 位 ARM** 架构（`arm64-v8a`）。
 
@@ -67,11 +67,11 @@
 
 ## 📱 鸿蒙 — HAP
 
-**最新版本：** [**v2.3**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.3) &nbsp;|&nbsp; [下载 HAP](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.3/MiniCPM-V-demo-HarmonyOS-v2.3.hap)
+**最新版本：** [**v2.5**](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/tag/v2.5) &nbsp;|&nbsp; [下载 HAP](https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/v2.5/MiniCPM-V-demo-HarmonyOS-v2.5.hap)
 
 | 文件 | 大小 | MD5 |
 | --- | --- | --- |
-| `MiniCPM-V-demo-HarmonyOS-v2.3.hap` | ~31 MB | `f149ecf4b431673ed8456468f546dd80` |
+| `MiniCPM-V-demo-HarmonyOS-v2.5.hap` | ~36 MB | `6e5a5fc1340e8db271c485b2c8823ad4` |
 
 ### 系统要求
 
@@ -85,7 +85,7 @@
 2. 在已安装 `hdc` 的电脑上连接设备，运行：
 
    ```bash
-   hdc install MiniCPM-V-demo-HarmonyOS-v2.3.hap
+   hdc install MiniCPM-V-demo-HarmonyOS-v2.5.hap
    ```
 
 3. 打开已安装的应用，在内置的 **模型管理** 中点击 **下载** 获取模型文件。
