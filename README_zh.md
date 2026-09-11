@@ -34,7 +34,7 @@
 > git submodule update --init --recursive --depth 1 --single-branch
 > ```
 >
-> 这样只会拉 `master` 分支的单 commit（约几十 MB），不会拉整个 llama.cpp-omni fork 的全 history。需要 push 到 `tc-mb/llama.cpp-omni:master` 的开发者可在 submodule 里执行 `git fetch --unshallow` 取消浅 clone。
+> 这样只会拉 `ios-omni` 分支的单 commit（约几十 MB），不会拉整个 llama.cpp-omni fork 的全 history。需要 push 到 `tc-mb/llama.cpp-omni:ios-omni` 的开发者可在 submodule 里执行 `git fetch --unshallow` 取消浅 clone。
 
 README 分为两大部分：
 

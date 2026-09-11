@@ -40,7 +40,7 @@ open & run" walkthrough for each platform.
 ## 2. The `llama.cpp-omni` submodule
 
 - URL: `https://github.com/tc-mb/llama.cpp-omni.git`
-- Branch: `master`
+- Branch: `ios-omni`
 - `.gitmodules` is marked `shallow = true`
 
 Recommended clone (one-shot, parent + submodule both shallow):
@@ -58,11 +58,11 @@ git submodule update --init --recursive --depth 1 --single-branch
 
 **Agent notes**
 
-- ❌ Do **not** switch the submodule branch (it is pinned to `master`).
+- ❌ Do **not** switch the submodule branch (it is pinned to `ios-omni`).
 - ❌ Do **not** commit upstream-only changes (e.g. random edits to `convert_hf_to_gguf.py`)
   inside the submodule without explicit user confirmation.
 - ✅ If you do edit the submodule on purpose: `git commit` + `git push` to
-  `tc-mb/llama.cpp-omni:master` first, then in the parent repo `git add llama.cpp-omni && git
+  `tc-mb/llama.cpp-omni:ios-omni` first, then in the parent repo `git add llama.cpp-omni && git
   commit` to bump the pointer.
 
 ---
