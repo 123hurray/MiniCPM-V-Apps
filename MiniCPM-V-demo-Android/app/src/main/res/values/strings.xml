@@ -51,6 +51,8 @@
     <string name="no_model_file">无模型文件</string>
     <string name="select_model">选择模型</string>
     <string name="delete_model_files">删除模型文件</string>
+    <string name="import_model_files">导入本地模型</string>
+    <string name="select_files">选择文件</string>
 
     <!-- MainActivity -->
     <string name="toast_load_model_first">请先加载模型</string>
@@ -98,6 +100,22 @@
     <string name="model_files_deleted">模型文件已删除</string>
     <string name="toast_no_files_to_delete">没有可删除的文件</string>
     <string name="toast_delete_failed">删除失败: %1$s</string>
+    <string name="import_model_hint">请为 %1$s 选择下列文件（可一次多选）：\n\n%2$s\n\n文件将复制到应用目录，无需访问 Android/data。</string>
+    <string name="importing_model">正在准备导入模型…</string>
+    <string name="importing_model_progress">正在导入 %1$d/%2$d：%3$s</string>
+    <string name="import_complete_status">导入完成！请点击加载模型</string>
+    <string name="import_complete">模型导入完成</string>
+    <string name="import_partial_status">已导入所选文件，仍缺少：%1$s</string>
+    <string name="import_partial">模型文件尚不完整，请继续导入缺少的文件</string>
+    <string name="import_failed">导入失败：%1$s</string>
+    <string name="import_unrecognized_files">文件名与当前模型不匹配：%1$s</string>
+    <string name="import_duplicate_files">重复选择了文件：%1$s</string>
+    <string name="import_create_dir_failed">无法创建模型目录</string>
+    <string name="import_unknown_name">无法读取所选文件名</string>
+    <string name="import_open_failed">无法打开文件：%1$s</string>
+    <string name="import_empty_file">文件为空：%1$s</string>
+    <string name="import_md5_failed">文件校验失败，请确认下载完整且版本正确：%1$s</string>
+    <string name="import_replace_failed">无法替换已有文件：%1$s</string>
 
     <!-- ChatAdapter -->
     <string name="thinking_in_progress">思考中…</string>

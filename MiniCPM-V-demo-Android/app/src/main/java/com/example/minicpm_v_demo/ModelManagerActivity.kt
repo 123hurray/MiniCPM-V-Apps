@@ -2,8 +2,11 @@ package com.example.minicpm_v_demo
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.database.Cursor
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.util.Log
 import android.view.View
 import android.widget.TextView
@@ -24,11 +27,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
+import java.security.MessageDigest
 
 class ModelManagerActivity : AppCompatActivity() {
 
     private lateinit var tvModelStatus: TextView
     private lateinit var btnDownload: MaterialButton
+    private lateinit var btnImport: MaterialButton
     private lateinit var btnLoadModel: MaterialButton
     private lateinit var btnDeleteModel: MaterialButton
     private lateinit var progressDownload: LinearProgressIndicator
@@ -37,6 +43,11 @@ class ModelManagerActivity : AppCompatActivity() {
 
     private lateinit var engine: LlamaEngine
     private lateinit var modelAdapter: ModelAdapter
+
+    private val modelFilePicker =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNotEmpty()) importModelFiles(uris)
+        }
 
     // Android 13+: POST_NOTIFICATIONS is a runtime permission. We need it
     // for the foreground download service's progress notification (without
@@ -65,6 +76,7 @@ class ModelManagerActivity : AppCompatActivity() {
 
         tvModelStatus = findViewById(R.id.tv_model_status)
         btnDownload = findViewById(R.id.btn_download)
+        btnImport = findViewById(R.id.btn_import)
         btnLoadModel = findViewById(R.id.btn_load_model)
         btnDeleteModel = findViewById(R.id.btn_delete_model)
         progressDownload = findViewById(R.id.progress_download)
@@ -80,6 +92,7 @@ class ModelManagerActivity : AppCompatActivity() {
         updateLanguageDisplay()
 
         btnDownload.setOnClickListener { onDownloadClicked() }
+        btnImport.setOnClickListener { onImportClicked() }
         btnLoadModel.setOnClickListener { loadSelectedModel() }
         btnDeleteModel.setOnClickListener { confirmDeleteModel() }
         findViewById<View>(R.id.btn_language).setOnClickListener { showLanguagePicker() }
@@ -231,6 +244,158 @@ class ModelManagerActivity : AppCompatActivity() {
         }
 
         startDownloadService()
+    }
+
+    private fun onImportClicked() {
+        if (ModelDownloadController.isRunning) {
+            Toast.makeText(this, R.string.toast_downloading, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val model = LlamaEngine.getSelectedModel(this)
+        val expected = requiredFiles(model).joinToString("\n") { "• ${it.fileName}" }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.import_model_files)
+            .setMessage(getString(R.string.import_model_hint, model.displayName, expected))
+            .setPositiveButton(R.string.select_files) { _, _ ->
+                modelFilePicker.launch(arrayOf("application/octet-stream", "application/x-gguf", "*/*"))
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun importModelFiles(uris: List<Uri>) {
+        val model = LlamaEngine.getSelectedModel(this)
+        btnImport.isEnabled = false
+        btnDownload.isEnabled = false
+        btnLoadModel.isEnabled = false
+        progressDownload.visibility = View.VISIBLE
+        tvModelStatus.text = getString(R.string.importing_model)
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val required = requiredFiles(model)
+                val selected = uris.map { uri -> uri to queryDisplayName(uri) }
+                val unknown = selected.map { it.second }.filter { name ->
+                    required.none { name == it.fileName || name == it.remoteName }
+                }
+                if (unknown.isNotEmpty()) {
+                    throw IOException(getString(R.string.import_unrecognized_files, unknown.joinToString()))
+                }
+
+                val duplicated = selected.mapNotNull { (_, name) ->
+                    required.firstOrNull { name == it.fileName || name == it.remoteName }?.fileName
+                }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+                if (duplicated.isNotEmpty()) {
+                    throw IOException(getString(R.string.import_duplicate_files, duplicated.joinToString()))
+                }
+
+                if (engine.state.value is LlamaState.ModelReady) engine.unloadModel()
+
+                val modelDir = File(LlamaEngine.modelDirFor(applicationContext, model))
+                if (!modelDir.exists() && !modelDir.mkdirs()) {
+                    throw IOException(getString(R.string.import_create_dir_failed))
+                }
+
+                selected.forEachIndexed { index, (uri, sourceName) ->
+                    val spec = required.first { sourceName == it.fileName || sourceName == it.remoteName }
+                    withContext(Dispatchers.Main) {
+                        tvModelStatus.text = getString(
+                            R.string.importing_model_progress,
+                            index + 1,
+                            selected.size,
+                            spec.fileName
+                        )
+                    }
+                    copyAndVerify(uri, File(modelDir, spec.fileName), spec.md5)
+                }
+
+                val missing = required.filterNot { File(modelDir, it.fileName).exists() }
+                withContext(Dispatchers.Main) {
+                    updateLoadButtonState()
+                    if (missing.isEmpty()) {
+                        tvModelStatus.text = getString(R.string.import_complete_status)
+                        Toast.makeText(this@ModelManagerActivity, R.string.import_complete, Toast.LENGTH_SHORT).show()
+                    } else {
+                        tvModelStatus.text = getString(
+                            R.string.import_partial_status,
+                            missing.joinToString { it.fileName }
+                        )
+                        Toast.makeText(this@ModelManagerActivity, R.string.import_partial, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Model import failed", e)
+                withContext(Dispatchers.Main) {
+                    tvModelStatus.text = getString(R.string.import_failed, e.message ?: e::class.java.simpleName)
+                    Toast.makeText(this@ModelManagerActivity, tvModelStatus.text, Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    progressDownload.visibility = View.GONE
+                    btnImport.isEnabled = true
+                    btnDownload.isEnabled = true
+                    updateLoadButtonState()
+                }
+            }
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        var cursor: Cursor? = null
+        return try {
+            cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0)
+            else uri.lastPathSegment?.substringAfterLast('/') ?: throw IOException(getString(R.string.import_unknown_name))
+        } finally {
+            cursor?.close()
+        }
+    }
+
+    private fun copyAndVerify(uri: Uri, target: File, expectedMd5: String?) {
+        val temp = File(target.parentFile, "${target.name}.importing")
+        temp.delete()
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                temp.outputStream().buffered().use { output -> input.copyTo(output) }
+            } ?: throw IOException(getString(R.string.import_open_failed, target.name))
+
+            if (temp.length() == 0L) throw IOException(getString(R.string.import_empty_file, target.name))
+            if (!expectedMd5.isNullOrBlank()) {
+                val actual = fileMd5(temp)
+                if (!actual.equals(expectedMd5, ignoreCase = true)) {
+                    throw IOException(getString(R.string.import_md5_failed, target.name))
+                }
+            }
+
+            if (target.exists() && !target.delete()) throw IOException(getString(R.string.import_replace_failed, target.name))
+            if (!temp.renameTo(target)) {
+                temp.copyTo(target, overwrite = true)
+                if (!temp.delete()) Log.w(TAG, "Could not delete import temp file: ${temp.absolutePath}")
+            }
+        } catch (e: Exception) {
+            temp.delete()
+            throw e
+        }
+    }
+
+    private fun fileMd5(file: File): String {
+        val digest = MessageDigest.getInstance("MD5")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun requiredFiles(model: ModelInfo): List<ModelFileSpec> = buildList {
+        add(ModelFileSpec(model.ggufFileName, model.ggufRemoteName, model.ggufMd5))
+        model.mmprojFileName?.let { add(ModelFileSpec(it, model.mmprojRemoteName, model.mmprojMd5)) }
+        model.acousticFileName?.let { add(ModelFileSpec(it, model.acousticRemoteName, model.acousticMd5)) }
     }
 
     private fun startDownloadService() {
@@ -435,4 +600,6 @@ class ModelManagerActivity : AppCompatActivity() {
     companion object {
         private val TAG = ModelManagerActivity::class.java.simpleName
     }
+
+    private data class ModelFileSpec(val fileName: String, val remoteName: String?, val md5: String?)
 }

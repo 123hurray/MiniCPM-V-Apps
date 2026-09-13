@@ -48,6 +48,8 @@
     <string name="no_model_file">No model file</string>
     <string name="select_model">Select Model</string>
     <string name="delete_model_files">Delete Model Files</string>
+    <string name="import_model_files">Import Local Model</string>
+    <string name="select_files">Select Files</string>
 
     <!-- MainActivity -->
     <string name="toast_load_model_first">Please load a model first</string>
@@ -95,6 +97,22 @@
     <string name="model_files_deleted">Model files deleted</string>
     <string name="toast_no_files_to_delete">No files to delete</string>
     <string name="toast_delete_failed">Delete failed: %1$s</string>
+    <string name="import_model_hint">Select the following file(s) for %1$s (multiple selection is supported):\n\n%2$s\n\nThey will be copied into the app; Android/data access is not required.</string>
+    <string name="importing_model">Preparing model import…</string>
+    <string name="importing_model_progress">Importing %1$d/%2$d: %3$s</string>
+    <string name="import_complete_status">Import complete! Tap Load Model</string>
+    <string name="import_complete">Model import complete</string>
+    <string name="import_partial_status">Selected files imported; still missing: %1$s</string>
+    <string name="import_partial">Model files are incomplete; import the missing file(s)</string>
+    <string name="import_failed">Import failed: %1$s</string>
+    <string name="import_unrecognized_files">File name does not match the selected model: %1$s</string>
+    <string name="import_duplicate_files">File selected more than once: %1$s</string>
+    <string name="import_create_dir_failed">Unable to create model directory</string>
+    <string name="import_unknown_name">Unable to read selected file name</string>
+    <string name="import_open_failed">Unable to open file: %1$s</string>
+    <string name="import_empty_file">File is empty: %1$s</string>
+    <string name="import_md5_failed">File verification failed; check that the download is complete and correct: %1$s</string>
+    <string name="import_replace_failed">Unable to replace existing file: %1$s</string>
 
     <!-- ChatAdapter -->
     <string name="thinking_in_progress">Thinking…</string>
