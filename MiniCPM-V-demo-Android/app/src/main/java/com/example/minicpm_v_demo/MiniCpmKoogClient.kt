@@ -11,6 +11,8 @@ import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -46,7 +48,7 @@ internal class MiniCpmKoogClient(
             val parsed = ToolCallProtocol.parse(rawResponse, callableTools, requiredArguments)
         ) {
             is ToolCallProtocol.Result.Valid -> {
-                onTrace(AgentTraceEvent.ToolCall(parsed.tool, parsed.arguments.toString()))
+                onTrace(AgentTraceEvent.ToolCall(parsed.tool, formatArguments(parsed.arguments)))
                 Message.Assistant(
                     parts = listOf(
                         MessagePart.Tool.Call(
@@ -143,7 +145,14 @@ internal class MiniCpmKoogClient(
         .filterIsInstance<Message.User>()
         .lastOrNull()
         ?.textContent()
+        ?.substringAfterLast(CURRENT_REQUEST_MARKER)
         .orEmpty()
+
+    private fun formatArguments(arguments: Map<String, Any?>): String = arguments.entries
+        .joinToString("\n") { (name, value) ->
+            val displayValue = (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
+            "$name:\n$displayValue"
+        }
 
     private fun hasSuccessfulToolResult(prompt: Prompt): Boolean = prompt.messages.any { message ->
         message.parts.filterIsInstance<MessagePart.Tool.Result>().any { result ->
@@ -194,5 +203,6 @@ internal class MiniCpmKoogClient(
     private companion object {
         val toolCallId = AtomicInteger(0)
         val THINKING = Regex("(?s)<think>(.*?)</think>\\s*", RegexOption.IGNORE_CASE)
+        const val CURRENT_REQUEST_MARKER = "Current user request:\n"
     }
 }
