@@ -134,7 +134,9 @@ internal class AgentTools(
         override suspend fun execute(args: ProtocolErrorArgs): String = """
             TOOL_CALL_FORMAT_ERROR
             ${args.message}
-            Correct the tool call and try again now. Reply with only one valid JSON object when calling a tool.
+            Continue reasoning in this same agent run. If a corrected tool call is required, reply with only one
+            valid tool-call object. If the requested tool already succeeded, do not call it again: inspect its
+            earlier TOOL RESULT and answer the user from that verified result.
             Do not claim that the requested tool ran until you receive its actual result.
         """.trimIndent()
     }

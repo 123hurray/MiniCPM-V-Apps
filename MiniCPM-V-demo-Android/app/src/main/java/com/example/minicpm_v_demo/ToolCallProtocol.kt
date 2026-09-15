@@ -28,6 +28,7 @@ internal object ToolCallProtocol {
         requiredArguments: Map<String, Set<String>> = emptyMap(),
     ): Result {
         val candidate = unwrap(rawResponse)
+        parseNativeFunction(candidate, allowedTools, requiredArguments)?.let { return it }
         parseRawBody(candidate, allowedTools)?.let { return it }
         if (!looksLikeToolCall(candidate, allowedTools)) return Result.NotAToolCall
 
@@ -72,6 +73,83 @@ internal object ToolCallProtocol {
         }
 
         return Result.Valid(tool, arguments)
+    }
+
+    /** Parse MiniCPM5's native XML function-call format from its official chat template. */
+    private fun parseNativeFunction(
+        candidate: String,
+        allowedTools: Set<String>,
+        requiredArguments: Map<String, Set<String>>,
+    ): Result? {
+        val calls = NATIVE_FUNCTION.findAll(candidate).toList()
+        if (calls.isEmpty()) {
+            return if (candidate.contains("<function", ignoreCase = true)) {
+                Result.Invalid(
+                    "The MiniCPM function call is incomplete. Use " +
+                        "<function name=\"tool_name\"><param name=\"argument\">value</param></function>."
+                )
+            } else {
+                null
+            }
+        }
+        if (calls.size != 1) {
+            return Result.Invalid("Call exactly one function at a time; received ${calls.size} function blocks.")
+        }
+
+        val call = calls.single()
+        val tool = NAME_ATTRIBUTE.find(call.groupValues[1])?.groupValues?.getOrNull(2)
+            ?: return Result.Invalid("The MiniCPM function block is missing a quoted name attribute.")
+        if (tool !in allowedTools) {
+            return Result.Invalid(
+                "Unknown tool '$tool'. Available tools: ${allowedTools.sorted().joinToString(", ")}."
+            )
+        }
+
+        val body = call.groupValues[2]
+        val parameters = linkedMapOf<String, JsonPrimitive>()
+        var consumedUntil = 0
+        for (parameter in NATIVE_PARAM.findAll(body)) {
+            if (body.substring(consumedUntil, parameter.range.first).isNotBlank()) {
+                return Result.Invalid("Function '$tool' contains text outside a <param> block.")
+            }
+            consumedUntil = parameter.range.last + 1
+            val name = NAME_ATTRIBUTE.find(parameter.groupValues[1])?.groupValues?.getOrNull(2)
+                ?: return Result.Invalid("A parameter in function '$tool' is missing a quoted name attribute.")
+            if (parameters.containsKey(name)) {
+                return Result.Invalid("Function '$tool' contains duplicate parameter '$name'.")
+            }
+            parameters[name] = nativeParameter(name, parameter.groupValues[2])
+        }
+        if (body.substring(consumedUntil).isNotBlank()) {
+            return Result.Invalid("Function '$tool' contains an incomplete <param> block.")
+        }
+
+        val missingArguments = requiredArguments[tool].orEmpty() - parameters.keys
+        if (missingArguments.isNotEmpty()) {
+            return Result.Invalid(
+                "Tool '$tool' is missing required arguments: ${missingArguments.sorted().joinToString(", ")}."
+            )
+        }
+        return Result.Valid(tool, JsonObject(parameters))
+    }
+
+    private fun nativeParameter(name: String, encoded: String): JsonPrimitive {
+        val trimmed = encoded.trim()
+        val decoded = if (trimmed.startsWith("<![CDATA[") && trimmed.endsWith("]]>")) {
+            trimmed.removePrefix("<![CDATA[").removeSuffix("]]>")
+        } else {
+            trimmed
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&amp;", "&")
+        }
+        return when (name) {
+            "recursive", "append" -> decoded.toBooleanStrictOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(decoded)
+            "timeoutSeconds", "maxChars" -> decoded.toIntOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(decoded)
+            else -> JsonPrimitive(decoded)
+        }
     }
 
     private fun parseRawBody(candidate: String, allowedTools: Set<String>): Result? {
@@ -153,6 +231,14 @@ internal object ToolCallProtocol {
     private val FUNCTION_KEY = Regex("\"function\"\\s*:")
     private val RAW_TOOL_CALL = Regex(
         "(?s)^\\s*<tool_call\\s+([^>]+)>\\s*(.*?)\\s*</tool_call>\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+    private val NATIVE_FUNCTION = Regex(
+        "(?s)<function\\s+([^>]+)>\\s*(.*?)\\s*</function>",
+        RegexOption.IGNORE_CASE,
+    )
+    private val NATIVE_PARAM = Regex(
+        "(?s)<param\\s+([^>]+)>(.*?)</param>",
         RegexOption.IGNORE_CASE,
     )
     private val NAME_ATTRIBUTE = Regex("(?:^|\\s)name\\s*=\\s*([\"'])([A-Za-z0-9_-]+)\\1", RegexOption.IGNORE_CASE)

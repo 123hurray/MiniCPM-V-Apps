@@ -155,4 +155,50 @@ class ToolCallProtocolTest {
         assertEquals("run_python_file", result.tool)
         assertEquals("quicksort.py", result.arguments["path"].toString().trim('"'))
     }
+
+    @Test
+    fun parsesMiniCpmNativeFunctionCall() {
+        val result = ToolCallProtocol.parse(
+            """<function name="run_shell"><param name="command">echo 1</param></function>""",
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("run_shell", result.tool)
+        assertEquals("echo 1", result.arguments["command"].toString().trim('"'))
+    }
+
+    @Test
+    fun parsesMiniCpmNativeCdataScriptAfterLlmText() {
+        val result = ToolCallProtocol.parse(
+            """
+                I will save the script first.
+                <function name="write_file"><param name="path">quicksort.py</param><param name="content"><![CDATA[
+                def quicksort(values):
+                    return sorted(values)
+                print(quicksort([3, 1, 2]))
+                ]]></param></function>
+            """.trimIndent(),
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("write_file", result.tool)
+        assertTrue(result.arguments["content"].toString().contains("def quicksort"))
+    }
+
+    @Test
+    fun incompleteMiniCpmNativeFunctionReturnsProtocolError() {
+        val result = ToolCallProtocol.parse(
+            "<function name=\"run_shell\"><param name=\"command\">date</param>",
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Invalid)
+    }
 }

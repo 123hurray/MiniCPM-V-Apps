@@ -65,14 +65,21 @@ internal class MiniCpmKoogClient(
                 }
                 if (recoveredCommand != null) {
                     if (successfulToolResult != null) {
+                        if (postToolBareCommandCorrections.incrementAndGet() <= MAX_POST_TOOL_CORRECTIONS) {
+                            return protocolErrorMessage(
+                                "The requested tool already completed successfully, but you repeated the bare " +
+                                    "command '$recoveredCommand' instead of reasoning from its result. Do not run " +
+                                    "it again. Inspect the earlier TOOL RESULT and now give the user a clear final answer."
+                            )
+                        }
                         onTrace(
                             AgentTraceEvent.ProtocolFeedback(
-                                "The model repeated a bare command after the tool had already completed; " +
-                                    "the verified tool output is returned instead of executing it twice."
+                                "The model repeatedly ignored the successful tool result; the verified output is " +
+                                    "returned after bounded correction attempts."
                             )
                         )
                         return Message.Assistant(
-                            content = "TOOL RESULT (${successfulToolResult.tool}):\n${successfulToolResult.output}",
+                            content = successfulToolResult.output,
                             metaInfo = ResponseMetaInfo.Empty,
                             finishReason = "stop",
                         )
@@ -130,30 +137,25 @@ internal class MiniCpmKoogClient(
 
             You are running locally on Android. The only accessible project area is the private Agent workspace.
             Available tools:
+            <tools>
             $toolText
+            </tools>
 
-            To call exactly one structured file tool, reply with ONLY one JSON object using this exact shape:
-            {"tool":"tool_name","arguments":{"argument":"value"}}
-            For Python and shell, prefer a raw tool block so code does not need JSON escaping:
-            <tool_call name="run_python">
-            print("hello from Python")
-            </tool_call>
-            <tool_call name="run_shell">
-            echo 'hello from shell'
-            </tool_call>
-            For a non-trivial Python script, write it first without JSON escaping, then execute the saved file:
-            <tool_call name="write_file" path="script.py">
+            Use MiniCPM5's native XML format and call exactly one function at a time:
+            <function name="run_shell"><param name="command">echo 'hello from shell'</param></function>
+            <function name="run_python"><param name="code"><![CDATA[print("hello from Python")]]></param></function>
+            A param value containing XML characters or multiple lines must be wrapped in CDATA.
+            For a non-trivial Python script, write it first, then execute the saved file:
+            <function name="write_file"><param name="path">script.py</param><param name="content"><![CDATA[
             def main():
                 print("hello from a saved script")
             main()
-            </tool_call>
-            <tool_call name="run_python_file">
-            script.py
-            </tool_call>
+            ]]></param></function>
+            <function name="run_python_file"><param name="path">script.py</param></function>
             Do not wrap a tool call in Markdown. After receiving a tool result, either call another tool or answer normally.
-            A raw block's body is passed verbatim as code or command. Shell remains single-line; Python may be multiline.
-            JSON strings must escape double quotes. If a TOOL_CALL_FORMAT_ERROR result is returned, correct the call
-            and try the tool immediately. A promise to try a tool is not a tool call and must not be your final answer.
+            The compatibility JSON format {"tool":"tool_name","arguments":{"argument":"value"}} is also accepted.
+            If a TOOL_CALL_FORMAT_ERROR result is returned, correct the call and continue immediately. A promise to
+            try a tool is not a tool call and must not be your final answer.
             Never invent tool output. Prefer list_files before assuming a file exists. The complete raw LLM response is
             recorded for the user before parsing, including malformed tool-call data.
         """.trimIndent()
@@ -229,11 +231,18 @@ internal class MiniCpmKoogClient(
                 when (part) {
                     is MessagePart.Text -> append(part.text)
                     is MessagePart.Reasoning -> append(part.content.joinToString("\n"))
-                    is MessagePart.Tool.Call -> append(
-                        "{\"tool\":\"${part.tool}\",\"arguments\":${part.args}}"
-                    )
+                    is MessagePart.Tool.Call -> {
+                        append("<function name=\"").append(xmlEscape(part.tool)).append("\">")
+                        part.args.forEach { (name, value) ->
+                            val content = (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
+                            append("<param name=\"").append(xmlEscape(name)).append("\">")
+                            append(xmlParameter(content))
+                            append("</param>")
+                        }
+                        append("</function>")
+                    }
                     is MessagePart.Tool.Result -> append(
-                        "TOOL RESULT (${part.tool}):\n${part.output}"
+                        "<tool_response>\n${part.output}\n</tool_response>"
                     )
                     else -> append(part.toString())
                 }
@@ -246,5 +255,22 @@ internal class MiniCpmKoogClient(
     private companion object {
         val toolCallId = AtomicInteger(0)
         val THINKING = Regex("(?s)<think>(.*?)</think>\\s*", RegexOption.IGNORE_CASE)
+        const val MAX_POST_TOOL_CORRECTIONS = 2
+    }
+
+    private val postToolBareCommandCorrections = AtomicInteger(0)
+
+    private fun xmlEscape(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
+    private fun xmlParameter(value: String): String = if (
+        value.contains('<') || value.contains('&') || value.contains('\n')
+    ) {
+        "<![CDATA[${value.replace("]]>", "]]]]><![CDATA[>")}]]>"
+    } else {
+        xmlEscape(value)
     }
 }
