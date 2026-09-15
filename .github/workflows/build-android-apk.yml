@@ -29,9 +29,6 @@ jobs:
           cache: gradle
           cache-dependency-path: MiniCPM-V-demo-Android/*.gradle.kts
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android build components
         run: |
           yes | sdkmanager --licenses >/dev/null || true
