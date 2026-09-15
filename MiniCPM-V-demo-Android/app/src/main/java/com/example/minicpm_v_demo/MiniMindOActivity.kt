@@ -2,12 +2,12 @@ package com.example.minicpm_v_demo
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.media.AcousticEchoCanceler
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
