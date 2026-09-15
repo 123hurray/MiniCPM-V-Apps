@@ -41,7 +41,9 @@ jobs:
 
       - name: Run unit tests and build unsigned release APK
         working-directory: MiniCPM-V-demo-Android
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
+        run: |
+          ./gradlew --no-daemon :app:compileDebugKotlin
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
 
       - name: Prepare signing inputs
         run: |

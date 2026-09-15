@@ -26,7 +26,7 @@ internal object ToolUseGuard {
     private val REQUIRES_EXECUTION = Regex(
         "(?:\u6267\u884c|\u8fd0\u884c|\u8c03\u7528|\u6d4b\u8bd5|\u9a8c\u8bc1).{0,24}(?:python|shell|\u547d\u4ee4|\u811a\u672c)|" +
             "(?:python|shell|\u547d\u4ee4|\u811a\u672c).{0,24}(?:\u6267\u884c|\u8fd0\u884c|\u8c03\u7528|\u6d4b\u8bd5|\u9a8c\u8bc1)|" +
-            "(?:\u6267\u884c\s*echo|\u751f\u6210.{0,8}\u968f\u673a\u6570)|" +
+            "(?:\u6267\u884c\\s*echo|\u751f\u6210.{0,8}\u968f\u673a\u6570)|" +
             "(?:run|execute|test|verify).{0,24}(?:python|shell|command|script)|" +
             "(?:python|shell|command|script).{0,24}(?:run|execute|test|verify)",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
