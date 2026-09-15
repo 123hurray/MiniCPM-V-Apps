@@ -48,6 +48,15 @@ jobs:
           cp MiniCPM-V-demo-Android/app/build/outputs/apk/debug/app-debug.apk \
             MiniCPM-V-demo-Android-v2.8.apk
 
+      - name: Verify APK metadata and signature
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$AAPT" dump badging MiniCPM-V-demo-Android-v2.8.apk | tee /tmp/apk-badging.txt
+          grep -F "package: name='com.example.minicpm_v_demo' versionCode='20' versionName='2.8'" \
+            /tmp/apk-badging.txt
+          "$APKSIGNER" verify --verbose MiniCPM-V-demo-Android-v2.8.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
