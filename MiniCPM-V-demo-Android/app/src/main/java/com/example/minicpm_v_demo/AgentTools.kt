@@ -11,6 +11,11 @@ internal class AgentTools(
     private val onActivity: suspend (String) -> Unit,
 ) {
     @Serializable
+    data class ProtocolErrorArgs(
+        val message: String,
+    )
+
+    @Serializable
     data class ListFilesArgs(
         @property:LLMDescription("Relative directory inside the Agent workspace, usually .")
         val path: String = ".",
@@ -107,11 +112,35 @@ internal class AgentTools(
         }
     }
 
+    /**
+     * Internal recovery path. MiniCpmKoogClient emits this call when the local
+     * model attempted a malformed tool call. Koog then returns this output to
+     * the model like any other tool result so it can correct the call and keep
+     * reasoning within the same bounded agent run.
+     */
+    private val protocolError = object : SimpleTool<ProtocolErrorArgs>(
+        argsType = typeToken<ProtocolErrorArgs>(),
+        name = PROTOCOL_ERROR_TOOL,
+        description = "Internal tool-call protocol recovery. Never call this tool directly.",
+    ) {
+        override suspend fun execute(args: ProtocolErrorArgs): String = """
+            TOOL_CALL_FORMAT_ERROR
+            ${args.message}
+            Correct the tool call and try again now. Reply with only one valid JSON object when calling a tool.
+            Do not claim that the requested tool ran until you receive its actual result.
+        """.trimIndent()
+    }
+
     val registry: ToolRegistry = ToolRegistry {
         tool(listFiles)
         tool(readFile)
         tool(writeFile)
         tool(runShell)
         tool(runPython)
+        tool(protocolError)
+    }
+
+    companion object {
+        const val PROTOCOL_ERROR_TOOL = "tool_protocol_error"
     }
 }

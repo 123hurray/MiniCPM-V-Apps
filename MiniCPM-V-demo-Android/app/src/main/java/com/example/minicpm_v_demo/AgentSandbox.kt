@@ -71,10 +71,11 @@ class AgentSandbox(context: Context) {
     }
 
     suspend fun runShell(command: String, timeoutSeconds: Int): String = coroutineScope {
-        validateShellCommand(command)
+        val normalizedCommand = normalizeShellCommand(command)
+        validateShellCommand(normalizedCommand)
         val timeout = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
         val process = withContext(Dispatchers.IO) {
-            ProcessBuilder("/system/bin/sh", "-c", command)
+            ProcessBuilder("/system/bin/sh", "-c", normalizedCommand)
                 .directory(root)
                 .redirectErrorStream(true)
                 .apply {
@@ -194,5 +195,8 @@ class AgentSandbox(context: Context) {
             "grep", "cut", "tr", "date", "echo", "printf", "mkdir", "touch",
             "cp", "mv", "rm", "rmdir", "du"
         )
+
+        internal fun normalizeShellCommand(command: String): String =
+            command.trimEnd('\r', '\n')
     }
 }

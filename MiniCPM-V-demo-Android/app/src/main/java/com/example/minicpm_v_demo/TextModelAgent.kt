@@ -8,6 +8,11 @@ import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.processor.ManualToolCallFixProcessor
 
+internal data class AgentConversationTurn(
+    val user: String,
+    val assistant: String,
+)
+
 /** A bounded Koog tool agent backed entirely by the selected on-device text model. */
 internal class TextModelAgent(
     context: Context,
@@ -16,7 +21,11 @@ internal class TextModelAgent(
     private val appContext = context.applicationContext
     private val sandbox = AgentSandbox(context.applicationContext)
 
-    suspend fun run(task: String, onToolActivity: suspend (String) -> Unit): String {
+    suspend fun run(
+        task: String,
+        history: List<AgentConversationTurn> = emptyList(),
+        onToolActivity: suspend (String) -> Unit,
+    ): String {
         val selectedModel = LlamaEngine.getSelectedModel(appContext)
         require(selectedModel.isTextOnly) { "Agent mode only supports text-only models" }
 
@@ -37,14 +46,28 @@ internal class TextModelAgent(
             toolRegistry = tools.registry,
             systemPrompt = SYSTEM_PROMPT,
             temperature = 0.0,
-            maxIterations = 8,
+            maxIterations = 10,
             responseProcessor = ManualToolCallFixProcessor(tools.registry),
         )
         return try {
-            agent.run(task).trim()
+            agent.run(buildTask(task, history)).trim()
         } finally {
             agent.close()
         }
+    }
+
+    private fun buildTask(task: String, history: List<AgentConversationTurn>): String = buildString {
+        val recentHistory = history.takeLast(MAX_HISTORY_TURNS)
+        if (recentHistory.isNotEmpty()) {
+            appendLine("Recent conversation context:")
+            recentHistory.forEach { turn ->
+                append("USER: ").appendLine(turn.user.take(MAX_HISTORY_ITEM_CHARS))
+                append("ASSISTANT: ").appendLine(turn.assistant.take(MAX_HISTORY_ITEM_CHARS))
+            }
+            appendLine()
+        }
+        appendLine("Current user request:")
+        append(task)
     }
 
     companion object {
@@ -52,7 +75,12 @@ internal class TextModelAgent(
             You are a concise local coding and text-task agent. Work step by step and use tools when they are needed.
             You may list/read/write files, execute restricted shell commands, and run Python in the Agent workspace.
             All paths are relative to that workspace. Do not claim to access files outside it.
+            When the user asks to test a tool, call that tool directly with a harmless concrete example.
+            A tool call is not complete until you receive and inspect its actual TOOL RESULT.
             Use at most the calls needed to complete the task. When done, return a clear final answer in the user's language.
         """.trimIndent()
+
+        private const val MAX_HISTORY_TURNS = 4
+        private const val MAX_HISTORY_ITEM_CHARS = 1500
     }
 }

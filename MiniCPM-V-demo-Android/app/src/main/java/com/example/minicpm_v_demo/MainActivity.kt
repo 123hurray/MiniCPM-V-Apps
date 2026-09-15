@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private var loadedModelId: String? = null
     private var messageIdCounter = 1L
     private val messages = mutableListOf<ChatMessage>()
+    private val agentHistory = mutableListOf<AgentConversationTurn>()
     private var createdWithLocale: String? = null
     private var isLocaleRestart = false
     private var isAgentMode = false
@@ -250,6 +251,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun clearChatUI() {
         messages.clear()
+        agentHistory.clear()
         val selectedModel = LlamaEngine.getSelectedModel(applicationContext)
         messages.add(ChatMessage.WelcomeCard(isTextOnly = selectedModel.isTextOnly))
         messageIdCounter = 1L
@@ -712,7 +714,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         generationJob = if (isAgentMode) {
-            runAgentRequest(userMsg, aiMsgId)
+            runAgentRequest(userMsg, aiMsgId, agentHistory.toList())
         } else lifecycleScope.launch(Dispatchers.Default) {
             val fullResponse = StringBuilder()
             engine.sendUserPrompt(userMsg)
@@ -751,12 +753,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun runAgentRequest(userMsg: String, aiMsgId: Long): Job =
+    private fun runAgentRequest(
+        userMsg: String,
+        aiMsgId: Long,
+        history: List<AgentConversationTurn>,
+    ): Job =
         lifecycleScope.launch(Dispatchers.Default) {
             val agent = TextModelAgent(applicationContext, engine)
             try {
                 updateAgentMessage(aiMsgId, getString(R.string.agent_working), true)
-                val answer = agent.run(userMsg) { toolName ->
+                val answer = agent.run(userMsg, history) { toolName ->
                     updateAgentMessage(
                         aiMsgId,
                         getString(R.string.agent_using_tool, toolName),
@@ -764,6 +770,10 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 updateAgentMessage(aiMsgId, answer, false)
+                withContext(Dispatchers.Main) {
+                    agentHistory.add(AgentConversationTurn(userMsg, answer))
+                    while (agentHistory.size > MAX_AGENT_HISTORY_TURNS) agentHistory.removeAt(0)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Agent execution failed", e)
                 updateAgentMessage(
@@ -873,5 +883,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private val TAG = MainActivity::class.java.simpleName
+        private const val MAX_AGENT_HISTORY_TURNS = 4
     }
 }

@@ -39,19 +39,19 @@ jobs:
             "ndk;27.0.12077973" \
             "cmake;4.1.2"
 
-      - name: Build debug APK
+      - name: Run unit tests and build debug APK
         working-directory: MiniCPM-V-demo-Android
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       - name: Prepare APK
         run: |
           cp MiniCPM-V-demo-Android/app/build/outputs/apk/debug/app-debug.apk \
-            MiniCPM-V-demo-Android-v2.6.apk
+            MiniCPM-V-demo-Android-v2.8.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCPM-V-demo-Android-v2.6
-          path: MiniCPM-V-demo-Android-v2.6.apk
+          name: MiniCPM-V-demo-Android-v2.8
+          path: MiniCPM-V-demo-Android-v2.8.apk
           if-no-files-found: error
           retention-days: 30

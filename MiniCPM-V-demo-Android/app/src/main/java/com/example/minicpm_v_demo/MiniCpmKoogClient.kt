@@ -10,6 +10,9 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
 import kotlinx.coroutines.flow.collect
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Bridges Koog's provider-neutral prompt API to the loaded local llama.cpp model. */
 internal class MiniCpmKoogClient(
@@ -29,11 +32,45 @@ internal class MiniCpmKoogClient(
         engine.sendUserPrompt(buildConversation(prompt), predictLength = 1536).collect { token ->
             response.append(token)
         }
-        return Message.Assistant(
-            content = response.toString().trim(),
-            metaInfo = ResponseMetaInfo.Empty,
-            finishReason = "stop",
-        )
+        val rawResponse = response.toString().trim()
+        val callableDescriptors = tools.filterNot { it.name == AgentTools.PROTOCOL_ERROR_TOOL }
+        val callableTools = callableDescriptors.mapTo(linkedSetOf()) { it.name }
+        val requiredArguments = callableDescriptors.associate { descriptor ->
+            descriptor.name to descriptor.requiredParameters.mapTo(linkedSetOf()) { it.name }
+        }
+        return when (
+            val parsed = ToolCallProtocol.parse(rawResponse, callableTools, requiredArguments)
+        ) {
+            is ToolCallProtocol.Result.Valid -> Message.Assistant(
+                parts = listOf(
+                    MessagePart.Tool.Call(
+                        id = "local_tool_${toolCallId.incrementAndGet()}",
+                        tool = parsed.tool,
+                        args = parsed.arguments,
+                    )
+                ),
+                metaInfo = ResponseMetaInfo.Empty,
+                finishReason = "tool_calls",
+            )
+
+            is ToolCallProtocol.Result.Invalid -> Message.Assistant(
+                parts = listOf(
+                    MessagePart.Tool.Call(
+                        id = "protocol_error_${toolCallId.incrementAndGet()}",
+                        tool = AgentTools.PROTOCOL_ERROR_TOOL,
+                        args = buildJsonObject { put("message", parsed.feedback) },
+                    )
+                ),
+                metaInfo = ResponseMetaInfo.Empty,
+                finishReason = "tool_calls",
+            )
+
+            ToolCallProtocol.Result.NotAToolCall -> Message.Assistant(
+                content = rawResponse,
+                metaInfo = ResponseMetaInfo.Empty,
+                finishReason = "stop",
+            )
+        }
     }
 
     override suspend fun moderate(prompt: Prompt, model: LLModel): ModerationResult =
@@ -47,12 +84,14 @@ internal class MiniCpmKoogClient(
         val suppliedSystem = prompt.messages
             .filterIsInstance<Message.System>()
             .joinToString("\n") { it.textContent() }
-        val toolText = tools.joinToString("\n") { tool ->
-            val required = tool.requiredParameters.joinToString(", ") { "${it.name}: ${it.type}" }
-            val optional = tool.optionalParameters.joinToString(", ") { "${it.name}: ${it.type} (optional)" }
-            val parameters = listOf(required, optional).filter { it.isNotBlank() }.joinToString(", ")
-            "- ${tool.name}($parameters): ${tool.description}"
-        }
+        val toolText = tools
+            .filterNot { it.name == AgentTools.PROTOCOL_ERROR_TOOL }
+            .joinToString("\n") { tool ->
+                val required = tool.requiredParameters.joinToString(", ") { "${it.name}: ${it.type}" }
+                val optional = tool.optionalParameters.joinToString(", ") { "${it.name}: ${it.type} (optional)" }
+                val parameters = listOf(required, optional).filter { it.isNotBlank() }.joinToString(", ")
+                "- ${tool.name}($parameters): ${tool.description}"
+            }
         return """
             $suppliedSystem
 
@@ -62,7 +101,11 @@ internal class MiniCpmKoogClient(
 
             To call exactly one tool, reply with ONLY one JSON object using this exact shape:
             {"tool":"tool_name","arguments":{"argument":"value"}}
+            Valid shell example:
+            {"tool":"run_shell","arguments":{"command":"echo 'hello from agent'","timeoutSeconds":15}}
             Do not wrap a tool call in Markdown. After receiving a tool result, either call another tool or answer normally.
+            JSON strings must escape double quotes. Never include a newline in a shell command.
+            If a TOOL_CALL_FORMAT_ERROR result is returned, correct the JSON and try the tool call again immediately.
             Never invent tool output. Prefer list_files before assuming a file exists.
         """.trimIndent()
     }
@@ -91,5 +134,9 @@ internal class MiniCpmKoogClient(
             }
         }
         append("ASSISTANT:\n")
+    }
+
+    private companion object {
+        val toolCallId = AtomicInteger(0)
     }
 }
