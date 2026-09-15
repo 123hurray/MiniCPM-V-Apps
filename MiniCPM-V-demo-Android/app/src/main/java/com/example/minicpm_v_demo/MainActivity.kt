@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAgent: MaterialButton
     private lateinit var btnClearChat: ImageButton
     private lateinit var btnModelManager: ImageButton
+    private lateinit var btnMiniMindO: ImageButton
     private lateinit var btnImageSlice: ImageButton
     private lateinit var cardInputBar: View
     private lateinit var appBarLayout: AppBarLayout
@@ -114,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         btnAgent = findViewById(R.id.btn_agent)
         btnClearChat = findViewById(R.id.btn_clear_chat)
         btnModelManager = findViewById(R.id.btn_model_manager)
+        btnMiniMindO = findViewById(R.id.btn_minimind_o)
         btnImageSlice = findViewById(R.id.btn_image_slice)
         cardInputBar = findViewById(R.id.card_input_bar)
         appBarLayout = findViewById(R.id.appBarLayout)
@@ -171,6 +173,9 @@ class MainActivity : AppCompatActivity() {
         btnClearChat.setOnClickListener { showClearChatDialog() }
         btnModelManager.setOnClickListener {
             startActivity(Intent(this, ModelManagerActivity::class.java))
+        }
+        btnMiniMindO.setOnClickListener {
+            startActivity(Intent(this, MiniMindOActivity::class.java))
         }
         btnImageSlice.setOnClickListener { showImageSliceDialog() }
 
@@ -862,6 +867,11 @@ class MainActivity : AppCompatActivity() {
             appliedAgentContextLength = null
             clearChatUI()
             updateUIForModelType()
+        } else if (loadedModelId != null && engine.state.value !is LlamaState.ModelReady) {
+            // MiniMindOActivity unloads llama.cpp to keep peak RAM bounded.
+            loadedModelId = null
+            hasAutoLoaded = false
+            loadDefaultModel()
         }
         refreshAgentContextIfNeeded()
     }

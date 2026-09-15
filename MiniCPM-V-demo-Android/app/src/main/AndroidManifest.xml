@@ -57,6 +57,12 @@
             android:label="@string/tts_title"
             android:parentActivityName=".MainActivity"
             android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".MiniMindOActivity"
+            android:exported="false"
+            android:configChanges="locale|layoutDirection"
+            android:label="@string/minimind_o_title"
+            android:parentActivityName=".MainActivity" />
 
         <service
             android:name=".ModelDownloadService"

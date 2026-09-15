@@ -217,4 +217,20 @@
     <string name="tts_preset_load_failed">加载预设失败: %1$s</string>
     <string name="tts_baselm_missing">BaseLM GGUF 文件不存在，请下载模型</string>
     <string name="tts_acoustic_missing">Acoustic GGUF 文件不存在，请下载模型</string>
+    <string name="minimind_o_title">MiniMind-O 实时对话</string>
+    <string name="minimind_o_welcome">端侧 speech-native 实时语音对话。模型不会包含在 APK 中，首次使用需单独下载约 500 MB 的混合 INT8/FP32 模型。</string>
+    <string name="minimind_o_checking">正在检查模型…</string>
+    <string name="minimind_o_download">下载 MiniMind-O 模型</string>
+    <string name="minimind_o_delete">删除模型</string>
+    <string name="minimind_o_start">开始实时对话</string>
+    <string name="minimind_o_stop">停止实时对话</string>
+    <string name="minimind_o_ready">模型已下载，点击开始并直接说话</string>
+    <string name="minimind_o_downloading">正在下载模型…</string>
+    <string name="minimind_o_listening">正在聆听，可随时说话打断</string>
+    <string name="minimind_o_speaking">检测到语音…</string>
+    <string name="minimind_o_user_turn">你：🎤 语音消息</string>
+    <string name="minimind_o_assistant">MiniMind-O：</string>
+    <string name="minimind_o_permission">需要麦克风权限才能进行实时对话</string>
+    <string name="minimind_o_error">MiniMind-O 错误：%1$s</string>
+    <string name="minimind_o_entry">实时语音对话</string>
 </resources>

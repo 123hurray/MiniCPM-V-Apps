@@ -54,6 +54,16 @@
                             android:orientation="horizontal">
 
                             <ImageButton
+                                android:id="@+id/btn_minimind_o"
+                                android:layout_width="40dp"
+                                android:layout_height="40dp"
+                                android:layout_marginEnd="4dp"
+                                android:background="?attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="@string/minimind_o_entry"
+                                android:src="@drawable/ic_mic"
+                                app:tint="?attr/colorOnSurfaceVariant" />
+
+                            <ImageButton
                                 android:id="@+id/btn_model_manager"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"

@@ -204,4 +204,20 @@
     <string name="tts_preset_load_failed">Failed to load preset: %1$s</string>
     <string name="tts_baselm_missing">BaseLM GGUF file missing, please download</string>
     <string name="tts_acoustic_missing">Acoustic GGUF file missing, please download</string>
+    <string name="minimind_o_title">MiniMind-O Live</string>
+    <string name="minimind_o_welcome">On-device speech-native conversation. Models are not included in the APK; the first run downloads about 500 MB of mixed INT8/FP32 model data.</string>
+    <string name="minimind_o_checking">Checking model…</string>
+    <string name="minimind_o_download">Download MiniMind-O model</string>
+    <string name="minimind_o_delete">Delete model</string>
+    <string name="minimind_o_start">Start live conversation</string>
+    <string name="minimind_o_stop">Stop live conversation</string>
+    <string name="minimind_o_ready">Model downloaded. Tap start and speak.</string>
+    <string name="minimind_o_downloading">Downloading model…</string>
+    <string name="minimind_o_listening">Listening — speak anytime to interrupt</string>
+    <string name="minimind_o_speaking">Speech detected…</string>
+    <string name="minimind_o_user_turn">You: 🎤 Voice message</string>
+    <string name="minimind_o_assistant">MiniMind-O: </string>
+    <string name="minimind_o_permission">Microphone permission is required for live conversation</string>
+    <string name="minimind_o_error">MiniMind-O error: %1$s</string>
+    <string name="minimind_o_entry">Live voice conversation</string>
 </resources>

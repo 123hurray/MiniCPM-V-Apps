@@ -20,8 +20,8 @@ android {
         // This sets Android 8.0 (Oreo) as the minimum supported release.
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "3.0"
+        versionCode = 23
+        versionName = "3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -97,6 +97,7 @@ android {
     androidResources {
         noCompress.add("gguf")
         noCompress.add("bin")
+        noCompress.add("pte")
     }
 }
 
@@ -121,6 +122,10 @@ dependencies {
     // Koog's tool loop to the already-loaded on-device MiniCPM text model.
     implementation("ai.koog:koog-agents:1.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+
+    // MiniMind-O speech-native runtime.  XNNPACK executes the separately
+    // downloaded, dynamic-int8 .pte models; no model weight is bundled in APK.
+    implementation("org.pytorch:executorch-android:1.4.0")
 
     // Markdown rendering for AI streaming responses (headings, bold, lists, code, etc.)
     implementation("io.noties.markwon:core:4.6.2")

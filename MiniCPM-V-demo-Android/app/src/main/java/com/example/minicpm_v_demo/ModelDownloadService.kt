@@ -74,7 +74,14 @@ class ModelDownloadService : Service() {
 
         downloadJob = scope.launch {
             try {
-                LlamaEngine.downloadModels(applicationContext) { message ->
+                val downloader: suspend ((String) -> Unit) -> Unit = if (
+                    action == ACTION_START_MINIMIND_O
+                ) {
+                    { progress -> MiniMindOModelStore.downloadAll(applicationContext, progress) }
+                } else {
+                    { progress -> LlamaEngine.downloadModels(applicationContext, progress) }
+                }
+                downloader { message ->
                     ModelDownloadController.publishProgress(message)
                     updateNotification(message)
                 }
@@ -195,12 +202,22 @@ class ModelDownloadService : Service() {
         private const val NOTIFICATION_ID = 0xD0_C1
 
         const val ACTION_START = "com.example.minicpm_v_demo.action.DOWNLOAD_START"
+        const val ACTION_START_MINIMIND_O =
+            "com.example.minicpm_v_demo.action.DOWNLOAD_MINIMIND_O"
         const val ACTION_CANCEL = "com.example.minicpm_v_demo.action.DOWNLOAD_CANCEL"
 
         fun start(context: Context) {
             ensureNotificationChannel(context)
             val intent = Intent(context, ModelDownloadService::class.java).apply {
                 action = ACTION_START
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun startMiniMindO(context: Context) {
+            ensureNotificationChannel(context)
+            val intent = Intent(context, ModelDownloadService::class.java).apply {
+                action = ACTION_START_MINIMIND_O
             }
             ContextCompat.startForegroundService(context, intent)
         }
