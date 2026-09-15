@@ -10,9 +10,11 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
 import kotlinx.coroutines.flow.collect
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -233,7 +235,10 @@ internal class MiniCpmKoogClient(
                     is MessagePart.Reasoning -> append(part.content.joinToString("\n"))
                     is MessagePart.Tool.Call -> {
                         append("<function name=\"").append(xmlEscape(part.tool)).append("\">")
-                        part.args.forEach { (name, value) ->
+                        val arguments = runCatching {
+                            Json.parseToJsonElement(part.args).jsonObject
+                        }.getOrElse { emptyMap() }
+                        arguments.forEach { (name, value) ->
                             val content = (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
                             append("<param name=\"").append(xmlEscape(name)).append("\">")
                             append(xmlParameter(content))
