@@ -37,8 +37,8 @@ internal class TextModelAgent(
             provider = provider,
             id = selectedModel.id,
             capabilities = listOf(LLMCapability.Tools),
-            contextLength = contextLength,
-            maxOutputTokens = maxOutputTokens,
+            contextLength = contextLength.toLong(),
+            maxOutputTokens = maxOutputTokens.toLong(),
         )
         val client = MiniCpmKoogClient(engine, provider, task, maxOutputTokens, onTrace)
         val executor = MultiLLMPromptExecutor(client)
