@@ -1,9 +1,5 @@
 pluginManagement {
     repositories {
-        // China mirrors first (Aliyun) to avoid SSL peer reset on direct mavenCentral/google.
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -13,6 +9,11 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        // China mirrors remain as fallbacks for local builds. Keeping official
+        // repositories first avoids CI failures when a mirror returns HTTP 5xx.
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
     }
 }
 plugins {
@@ -21,11 +22,10 @@ plugins {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // China mirrors first; original sources kept as fallback.
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
         google()
         mavenCentral()
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
     }
 }
 
