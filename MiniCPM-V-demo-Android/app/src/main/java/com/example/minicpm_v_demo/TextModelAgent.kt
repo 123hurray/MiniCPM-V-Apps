@@ -28,6 +28,8 @@ internal class TextModelAgent(
     ): String {
         val selectedModel = LlamaEngine.getSelectedModel(appContext)
         require(selectedModel.isTextOnly) { "Agent mode only supports text-only models" }
+        val contextLength = LlamaEngine.getAgentContextLength(appContext)
+        val maxOutputTokens = LlamaEngine.getAgentMaxOutputTokens(appContext)
 
         val tools = AgentTools(sandbox, onTrace)
         val provider = LLMProvider("minicpm-local", "MiniCPM Local")
@@ -35,10 +37,10 @@ internal class TextModelAgent(
             provider = provider,
             id = selectedModel.id,
             capabilities = listOf(LLMCapability.Tools),
-            contextLength = 4096,
-            maxOutputTokens = 1536,
+            contextLength = contextLength,
+            maxOutputTokens = maxOutputTokens,
         )
-        val client = MiniCpmKoogClient(engine, provider, onTrace)
+        val client = MiniCpmKoogClient(engine, provider, task, maxOutputTokens, onTrace)
         val executor = MultiLLMPromptExecutor(client)
         val agent = AIAgent(
             promptExecutor = executor,
@@ -78,6 +80,7 @@ internal class TextModelAgent(
             When the user asks to test a tool, call that tool directly with a harmless concrete example.
             A tool call is not complete until you receive and inspect its actual TOOL RESULT.
             If a tool call fails or its format is rejected, inspect the feedback, correct it, and continue.
+            For non-trivial or multiline Python, write a .py file first and execute it with run_python_file.
             Never end with a promise such as "I will try"; perform the promised tool call in the same run.
             Use at most the calls needed to complete the task. When done, return a clear final answer in the user's language.
         """.trimIndent()

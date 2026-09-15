@@ -5,11 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToolCallProtocolTest {
-    private val tools = setOf("run_shell", "run_python", "read_file")
+    private val tools = setOf("run_shell", "run_python", "run_python_file", "read_file", "write_file")
     private val required = mapOf(
         "run_shell" to setOf("command"),
         "run_python" to setOf("code"),
+        "run_python_file" to setOf("path"),
         "read_file" to setOf("path"),
+        "write_file" to setOf("path", "content"),
     )
 
     @Test
@@ -117,5 +119,40 @@ class ToolCallProtocolTest {
         )
 
         assertTrue(result is ToolCallProtocol.Result.Invalid)
+    }
+
+    @Test
+    fun parsesRawWriteFileForComplexPython() {
+        val result = ToolCallProtocol.parse(
+            """
+                <tool_call name="write_file" path="quicksort.py">
+                def quicksort(values):
+                    return sorted(values)
+                print(quicksort([2, 1]))
+                </tool_call>
+            """.trimIndent(),
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("write_file", result.tool)
+        assertEquals("quicksort.py", result.arguments["path"].toString().trim('"'))
+        assertTrue(result.arguments["content"].toString().contains("def quicksort"))
+    }
+
+    @Test
+    fun parsesRawPythonFileExecution() {
+        val result = ToolCallProtocol.parse(
+            "<tool_call name=\"run_python_file\">quicksort.py</tool_call>",
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("run_python_file", result.tool)
+        assertEquals("quicksort.py", result.arguments["path"].toString().trim('"'))
     }
 }

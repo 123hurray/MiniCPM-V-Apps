@@ -84,7 +84,9 @@ internal object ToolCallProtocol {
         } else {
             null
         }
-        val tool = match.groupValues[1]
+        val attributes = match.groupValues[1]
+        val tool = NAME_ATTRIBUTE.find(attributes)?.groupValues?.getOrNull(2)
+            ?: return Result.Invalid("The raw tool block is missing a quoted name attribute.")
         if (tool !in allowedTools) {
             return Result.Invalid(
                 "Unknown tool '$tool'. Available tools: ${allowedTools.sorted().joinToString(", ")}."
@@ -93,13 +95,33 @@ internal object ToolCallProtocol {
         val argumentName = when (tool) {
             "run_python" -> "code"
             "run_shell" -> "command"
+            "run_python_file" -> "path"
+            "write_file" -> "content"
             else -> return Result.Invalid(
-                "Raw tool blocks are supported only for run_python and run_shell. Use JSON for '$tool'."
+                "Raw tool blocks are supported only for run_python, run_python_file, run_shell, and write_file. " +
+                    "Use JSON for '$tool'."
             )
         }
         val body = match.groupValues[2].trim('\n', '\r')
         if (body.isBlank()) return Result.Invalid("Raw tool block for '$tool' is empty.")
-        return Result.Valid(tool, buildJsonObject { put(argumentName, body) })
+        val writePath = if (tool == "write_file") {
+            PATH_ATTRIBUTE.find(attributes)?.groupValues?.getOrNull(2)
+                ?: return Result.Invalid(
+                    "Raw write_file requires a quoted relative path attribute, for example " +
+                        "<tool_call name=\"write_file\" path=\"script.py\">..."
+                )
+        } else {
+            null
+        }
+        val arguments = buildJsonObject {
+            if (tool == "write_file") {
+                put("path", requireNotNull(writePath))
+                put("content", body)
+            } else {
+                put(argumentName, body)
+            }
+        }
+        return Result.Valid(tool, arguments)
     }
 
     private fun unwrap(raw: String): String {
@@ -130,7 +152,9 @@ internal object ToolCallProtocol {
     private val TOOL_KEY = Regex("\"(?:tool|name|tool_name)\"\\s*:")
     private val FUNCTION_KEY = Regex("\"function\"\\s*:")
     private val RAW_TOOL_CALL = Regex(
-        "(?s)^\\s*<tool_call\\s+name\\s*=\\s*[\"']([A-Za-z0-9_-]+)[\"']\\s*>\\s*(.*?)\\s*</tool_call>\\s*$",
+        "(?s)^\\s*<tool_call\\s+([^>]+)>\\s*(.*?)\\s*</tool_call>\\s*$",
         RegexOption.IGNORE_CASE,
     )
+    private val NAME_ATTRIBUTE = Regex("(?:^|\\s)name\\s*=\\s*([\"'])([A-Za-z0-9_-]+)\\1", RegexOption.IGNORE_CASE)
+    private val PATH_ATTRIBUTE = Regex("(?:^|\\s)path\\s*=\\s*([\"'])([^\"']+)\\1", RegexOption.IGNORE_CASE)
 }

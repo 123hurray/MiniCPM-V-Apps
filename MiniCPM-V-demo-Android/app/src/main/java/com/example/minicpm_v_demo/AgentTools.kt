@@ -58,6 +58,14 @@ internal class AgentTools(
         val timeoutSeconds: Int = 15,
     )
 
+    @Serializable
+    data class PythonFileArgs(
+        @property:LLMDescription("Relative .py file path inside the Agent workspace")
+        val path: String,
+        @property:LLMDescription("Timeout from 1 to 30 seconds")
+        val timeoutSeconds: Int = 15,
+    )
+
     private val listFiles = object : SimpleTool<ListFilesArgs>(
         argsType = typeToken<ListFilesArgs>(),
         name = "list_files",
@@ -103,6 +111,15 @@ internal class AgentTools(
             executeTraced(name) { sandbox.runPython(args.code, args.timeoutSeconds) }
     }
 
+    private val runPythonFile = object : SimpleTool<PythonFileArgs>(
+        argsType = typeToken<PythonFileArgs>(),
+        name = "run_python_file",
+        description = "Run an existing Python .py file from the private Agent workspace.",
+    ) {
+        override suspend fun execute(args: PythonFileArgs): String =
+            executeTraced(name) { sandbox.runPythonFile(args.path, args.timeoutSeconds) }
+    }
+
     /**
      * Internal recovery path. MiniCpmKoogClient emits this call when the local
      * model attempted a malformed tool call. Koog then returns this output to
@@ -128,6 +145,7 @@ internal class AgentTools(
         tool(writeFile)
         tool(runShell)
         tool(runPython)
+        tool(runPythonFile)
         tool(protocolError)
     }
 

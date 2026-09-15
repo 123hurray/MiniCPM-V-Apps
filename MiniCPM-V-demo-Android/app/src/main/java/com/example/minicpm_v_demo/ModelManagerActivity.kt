@@ -23,6 +23,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.slider.Slider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,6 +41,7 @@ class ModelManagerActivity : AppCompatActivity() {
     private lateinit var progressDownload: LinearProgressIndicator
     private lateinit var recyclerModels: RecyclerView
     private lateinit var tvLanguageValue: TextView
+    private lateinit var tvAgentSettingsValue: TextView
 
     private lateinit var engine: LlamaEngine
     private lateinit var modelAdapter: ModelAdapter
@@ -82,6 +84,7 @@ class ModelManagerActivity : AppCompatActivity() {
         progressDownload = findViewById(R.id.progress_download)
         recyclerModels = findViewById(R.id.recycler_models)
         tvLanguageValue = findViewById(R.id.tv_language_value)
+        tvAgentSettingsValue = findViewById(R.id.tv_agent_settings_value)
 
         engine = LlamaEngine.getInstance(applicationContext)
 
@@ -90,12 +93,14 @@ class ModelManagerActivity : AppCompatActivity() {
         observeEngineState()
         observeDownloadStatus()
         updateLanguageDisplay()
+        updateAgentSettingsDisplay()
 
         btnDownload.setOnClickListener { onDownloadClicked() }
         btnImport.setOnClickListener { onImportClicked() }
         btnLoadModel.setOnClickListener { loadSelectedModel() }
         btnDeleteModel.setOnClickListener { confirmDeleteModel() }
         findViewById<View>(R.id.btn_language).setOnClickListener { showLanguagePicker() }
+        findViewById<View>(R.id.btn_agent_settings).setOnClickListener { showAgentSettings() }
     }
 
     private fun setupModelList() {
@@ -576,6 +581,47 @@ class ModelManagerActivity : AppCompatActivity() {
 
     private fun updateLanguageDisplay() {
         tvLanguageValue.text = LocaleManager.currentLanguage(this).displayName
+    }
+
+    private fun updateAgentSettingsDisplay() {
+        tvAgentSettingsValue.text = "${LlamaEngine.getAgentContextLength(this)} / " +
+            LlamaEngine.getAgentMaxOutputTokens(this)
+    }
+
+    private fun showAgentSettings() {
+        val view = layoutInflater.inflate(R.layout.dialog_agent_settings, null, false)
+        val contextSlider = view.findViewById<Slider>(R.id.slider_agent_context)
+        val outputSlider = view.findViewById<Slider>(R.id.slider_agent_output)
+        val contextValue = view.findViewById<TextView>(R.id.tv_agent_context_value)
+        val outputValue = view.findViewById<TextView>(R.id.tv_agent_output_value)
+
+        contextSlider.value = LlamaEngine.getAgentContextLength(this).toFloat()
+        outputSlider.value = LlamaEngine.getAgentMaxOutputTokens(this).toFloat()
+        contextValue.text = contextSlider.value.toInt().toString()
+        outputValue.text = outputSlider.value.toInt().toString()
+        contextSlider.addOnChangeListener { _, value, _ ->
+            contextValue.text = value.toInt().toString()
+        }
+        outputSlider.addOnChangeListener { _, value, _ ->
+            outputValue.text = value.toInt().toString()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.agent_settings_dialog_title)
+            .setView(view)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val contextLength = contextSlider.value.toInt()
+                val maxOutputTokens = outputSlider.value.toInt()
+                LlamaEngine.setAgentSettings(this, contextLength, maxOutputTokens)
+                updateAgentSettingsDisplay()
+                Toast.makeText(
+                    this,
+                    getString(R.string.agent_settings_saved, contextLength, maxOutputTokens),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun showLanguagePicker() {

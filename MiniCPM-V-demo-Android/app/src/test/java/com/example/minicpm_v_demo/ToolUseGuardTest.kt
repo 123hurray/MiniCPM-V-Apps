@@ -37,4 +37,14 @@ class ToolUseGuardTest {
             )
         )
     }
+
+    @Test
+    fun bareShellAndCurrentTimeRequestsRequireExecution() {
+        assertNotNull(
+            ToolUseGuard.continuationFeedback("\u8fd0\u884c echo 1", "echo 1", false)
+        )
+        assertNotNull(
+            ToolUseGuard.continuationFeedback("\u8f93\u51fa\u5f53\u524d\u65f6\u95f4", "date", false)
+        )
+    }
 }

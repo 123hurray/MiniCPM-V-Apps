@@ -1,5 +1,6 @@
 #include <android/log.h>
 #include <jni.h>
+#include <algorithm>
 #include <iomanip>
 #include <cmath>
 #include <string>
@@ -32,6 +33,10 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 constexpr int   N_THREADS               = 4;
 
 constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;
+// Tool loops need room for the system prompt, prior tool results and a longer
+// model response. This larger KV cache is enabled only while Agent mode is on.
+constexpr int   MIN_AGENT_CONTEXT_SIZE  = 4096;
+constexpr int   MAX_AGENT_CONTEXT_SIZE  = 16384;
 // MiniCPM-V-4.6 video understanding feeds up to 64 frames * ~64 visual
 // tokens each into the KV cache; 4096 is not enough.  iOS demo
 // (MBHomeViewController+LoadModel.swift) bumps n_ctx to 8192 only on
@@ -78,6 +83,17 @@ static int                                g_n_ctx = DEFAULT_CONTEXT_SIZE;
 // MiniCPM5 / V-4.6 thinking toggle. Default off so the first reply is
 // not a long <think> dump.
 static bool                               g_enable_thinking = false;
+// Zero uses the model-specific default; otherwise this is the configured
+// Agent KV-cache length.
+static int                                g_agent_context_size = 0;
+
+static int effective_context_size() {
+    const bool is_v46 = (g_minicpmv_version == 46) ||
+                        (g_minicpmv_version == 460) ||
+                        (g_minicpmv_version == 461);
+    if (g_agent_context_size > 0) { return g_agent_context_size; }
+    return is_v46 ? V46_CONTEXT_SIZE : DEFAULT_CONTEXT_SIZE;
+}
 
 static void apply_minicpm5_thinking_suffix(std::string &prompt) {
     static const char kAss[] = "<|im_start|>assistant\n";
@@ -238,6 +254,18 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_setEnableThinkingNative(JNIEnv * /
     LOGi("%s: enable_thinking=%d", __func__, (int) g_enable_thinking);
 }
 
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_example_minicpm_1v_1demo_LlamaEngine_setAgentContextSizeNative(JNIEnv * /*env*/,
+                                                                       jobject,
+                                                                       jint jcontext_size) {
+    const int requested = (int) jcontext_size;
+    g_agent_context_size = requested <= 0
+        ? 0
+        : std::clamp(requested, MIN_AGENT_CONTEXT_SIZE, MAX_AGENT_CONTEXT_SIZE);
+    LOGi("%s: agent_context_size=%d", __func__, g_agent_context_size);
+}
+
 static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
@@ -284,11 +312,9 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_prepare(JNIEnv * /*env*/, jobject 
     // a larger KV budget than the 4096 default; everything else stays at
     // 4096 to keep memory pressure low on older / non-vision models.
     // Matches the iOS demo's MTMDParams.nCtx = 8192 on V46MultiModel.
-    const bool is_v46 = (g_minicpmv_version == 46) ||
-                        (g_minicpmv_version == 460) ||
-                        (g_minicpmv_version == 461);
-    const int  n_ctx  = is_v46 ? V46_CONTEXT_SIZE : DEFAULT_CONTEXT_SIZE;
-    LOGi("%s: minicpmv_version=%d -> n_ctx=%d", __func__, g_minicpmv_version, n_ctx);
+    const int n_ctx = effective_context_size();
+    LOGi("%s: minicpmv_version=%d agent_context_size=%d -> n_ctx=%d", __func__,
+         g_minicpmv_version, g_agent_context_size, n_ctx);
 
     auto *context = init_context(g_model, n_ctx);
     if (!context) { return 1; }
@@ -547,7 +573,7 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_prefillImage(
 }
 
 extern "C"
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_example_minicpm_1v_1demo_LlamaEngine_fullReset(JNIEnv *, jobject) {
     reset_long_term_states();
     reset_short_term_states();
@@ -559,17 +585,27 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_fullReset(JNIEnv *, jobject) {
     llama_free(g_context);
     g_context = nullptr;
 
-    auto *context = init_context(g_model);
+    int n_ctx = effective_context_size();
+    auto *context = init_context(g_model, n_ctx);
+    if (!context && g_agent_context_size > 0) {
+        LOGw("%s: Failed to allocate Agent n_ctx=%d; falling back to model default", __func__, n_ctx);
+        g_agent_context_size = 0;
+        n_ctx = effective_context_size();
+        context = init_context(g_model, n_ctx);
+    }
     if (!context) {
         LOGe("%s: Failed to reinitialize context!", __func__);
-        return;
+        return 0;
     }
     g_context = context;
+    g_n_ctx = n_ctx;
     g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
     g_chat_templates = common_chat_templates_init(g_model, "");
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
 
-    LOGi("%s: Full reset complete - context recreated, KV cache fresh, sampler reinitialized", __func__);
+    LOGi("%s: Full reset complete - context recreated with n_ctx=%d, KV cache fresh, sampler reinitialized",
+         __func__, n_ctx);
+    return n_ctx;
 }
 
 extern "C"
@@ -802,6 +838,7 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_unload(JNIEnv * /*env*/, jobject /
     llama_batch_free(g_batch);
     llama_free(g_context);
     llama_model_free(g_model);
+    g_agent_context_size = 0;
 }
 
 extern "C"

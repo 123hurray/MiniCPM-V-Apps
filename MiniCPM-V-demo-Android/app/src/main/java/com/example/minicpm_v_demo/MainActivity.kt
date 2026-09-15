@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private var createdWithLocale: String? = null
     private var isLocaleRestart = false
     private var isAgentMode = false
+    private var appliedAgentContextLength: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -408,18 +409,18 @@ class MainActivity : AppCompatActivity() {
             return
         }
         isAgentMode = enabled
-        val model = LlamaEngine.getSelectedModel(applicationContext)
-        if (enabled && model.supportsThinking && !LlamaEngine.getEnableThinking(this)) {
-            // Agent mode exposes the model's planning trace, so enable the
-            // model's native thinking stream when entering the mode.
-            engine.setEnableThinking(true)
-            refreshThinkButton()
-        }
         refreshAgentButton()
         enableInput(false)
         lifecycleScope.launch(Dispatchers.IO) {
-            runCatching { engine.clearContext() }
-                .onFailure { Log.w(TAG, "Failed to reset context while switching Agent mode", it) }
+            runCatching { engine.configureAgentContext(enabled) }
+                .onSuccess {
+                    appliedAgentContextLength = if (enabled) {
+                        LlamaEngine.getAgentContextLength(applicationContext)
+                    } else {
+                        null
+                    }
+                }
+                .onFailure { Log.w(TAG, "Failed to configure context while switching Agent mode", it) }
             withContext(Dispatchers.Main) {
                 clearChatUI()
                 enableInput(true)
@@ -858,12 +859,26 @@ class MainActivity : AppCompatActivity() {
             reloadAfterModelSwitch()
         } else if (LlamaEngine.consumeModelSwitched(applicationContext)) {
             loadedModelId = selectedId
+            appliedAgentContextLength = null
             clearChatUI()
             updateUIForModelType()
+        }
+        refreshAgentContextIfNeeded()
+    }
+
+    private fun refreshAgentContextIfNeeded() {
+        if (!isAgentMode || engine.state.value !is LlamaState.ModelReady) return
+        val desired = LlamaEngine.getAgentContextLength(applicationContext)
+        if (appliedAgentContextLength == desired) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching { engine.configureAgentContext(true) }
+                .onSuccess { appliedAgentContextLength = desired }
+                .onFailure { Log.w(TAG, "Failed to apply updated Agent context", it) }
         }
     }
 
     private fun reloadAfterModelSwitch() {
+        appliedAgentContextLength = null
         enableInput(false)
         lifecycleScope.launch(Dispatchers.IO) {
             try {

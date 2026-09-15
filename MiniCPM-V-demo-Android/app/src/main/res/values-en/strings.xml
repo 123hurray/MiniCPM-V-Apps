@@ -156,6 +156,14 @@
     <!-- Language picker -->
     <string name="settings_language">Language</string>
     <string name="language_picker_title">Choose Language</string>
+    <string name="agent_settings">Agent Settings</string>
+    <string name="agent_settings_description">Context / per-turn output tokens</string>
+    <string name="agent_settings_dialog_title">Agent Generation Parameters</string>
+    <string name="agent_context_length">Context length (tokens)</string>
+    <string name="agent_context_hint">Used only in Agent mode. Larger values reduce truncation but use more memory; takes effect after rebuilding the KV cache.</string>
+    <string name="agent_max_output">Maximum output per turn (tokens)</string>
+    <string name="agent_max_output_hint">Limits each LLM text generation. Takes effect on the next Agent request.</string>
+    <string name="agent_settings_saved">Agent settings saved: %1$d / %2$d</string>
 
     <!-- TTS Activity -->
     <string name="tts_title">TTS (VoxCPM2)</string>

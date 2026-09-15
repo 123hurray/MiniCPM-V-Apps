@@ -2,7 +2,7 @@ package com.example.minicpm_v_demo
 
 internal sealed interface AgentTraceEvent {
     data class Progress(val text: String) : AgentTraceEvent
-    data class Thought(val text: String) : AgentTraceEvent
+    data class LlmText(val text: String) : AgentTraceEvent
     data class ToolCall(val tool: String, val input: String) : AgentTraceEvent
     data class ToolResult(val tool: String, val output: String, val isError: Boolean) : AgentTraceEvent
     data class ProtocolFeedback(val text: String) : AgentTraceEvent
@@ -15,9 +15,9 @@ internal object AgentTraceFormatter {
         events.takeLast(MAX_EVENTS).forEach { event ->
             when (event) {
                 is AgentTraceEvent.Progress -> appendLine("- \u72b6\u6001\uff1a${clip(event.text, MAX_TEXT_CHARS)}")
-                is AgentTraceEvent.Thought -> {
-                    appendLine("- \u601d\u8003\uff1a")
-                    appendCode(clip(event.text, MAX_THOUGHT_CHARS))
+                is AgentTraceEvent.LlmText -> {
+                    appendLine("- LLM \u6587\u672c\uff1a")
+                    appendCode(clip(event.text, MAX_LLM_TEXT_CHARS))
                 }
                 is AgentTraceEvent.ToolCall -> {
                     appendLine("- \u5de5\u5177\uff1a`${event.tool}`")
@@ -54,6 +54,6 @@ internal object AgentTraceFormatter {
 
     private const val MAX_EVENTS = 40
     private const val MAX_TEXT_CHARS = 2_000
-    private const val MAX_THOUGHT_CHARS = 4_000
+    private const val MAX_LLM_TEXT_CHARS = 16_000
     private const val MAX_TOOL_CHARS = 6_000
 }

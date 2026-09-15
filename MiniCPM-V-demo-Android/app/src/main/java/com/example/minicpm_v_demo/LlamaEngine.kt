@@ -69,6 +69,8 @@ class LlamaEngine private constructor(
         private const val PREFS_NAME = "model_prefs"
         private const val KEY_SELECTED_MODEL = "selected_model_id"
         private const val KEY_IMAGE_MAX_SLICE = "image_max_slice_nums"
+        private const val KEY_AGENT_CONTEXT_LENGTH = "agent_context_length"
+        private const val KEY_AGENT_MAX_OUTPUT_TOKENS = "agent_max_output_tokens"
         private const val KEY_MODEL_SWITCHED = "model_switched"
         private const val KEY_ENABLE_THINKING = "enable_thinking"
 
@@ -83,6 +85,15 @@ class LlamaEngine private constructor(
         // prefill latency drop the chat-page slider down to 1 (no
         // slicing, ~9x fewer image tokens).
         const val DEFAULT_IMAGE_SLICE = MAX_IMAGE_SLICE
+
+        const val MIN_AGENT_CONTEXT_LENGTH = 4096
+        const val MAX_AGENT_CONTEXT_LENGTH = 16384
+        const val AGENT_CONTEXT_STEP = 4096
+        const val DEFAULT_AGENT_CONTEXT_LENGTH = 8192
+        const val MIN_AGENT_MAX_OUTPUT_TOKENS = 512
+        const val MAX_AGENT_MAX_OUTPUT_TOKENS = 4096
+        const val AGENT_MAX_OUTPUT_STEP = 512
+        const val DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 3072
 
         fun getInstance(context: Context): LlamaEngine =
             instance ?: synchronized(this) {
@@ -125,6 +136,29 @@ class LlamaEngine private constructor(
         fun setImageMaxSliceNumsPref(context: Context, n: Int) {
             val clamped = n.coerceIn(MIN_IMAGE_SLICE, MAX_IMAGE_SLICE)
             prefs(context).edit().putInt(KEY_IMAGE_MAX_SLICE, clamped).apply()
+        }
+
+        fun getAgentContextLength(context: Context): Int =
+            prefs(context).getInt(KEY_AGENT_CONTEXT_LENGTH, DEFAULT_AGENT_CONTEXT_LENGTH)
+                .coerceIn(MIN_AGENT_CONTEXT_LENGTH, MAX_AGENT_CONTEXT_LENGTH)
+                .let { it - it % AGENT_CONTEXT_STEP }
+
+        fun getAgentMaxOutputTokens(context: Context): Int =
+            prefs(context).getInt(KEY_AGENT_MAX_OUTPUT_TOKENS, DEFAULT_AGENT_MAX_OUTPUT_TOKENS)
+                .coerceIn(MIN_AGENT_MAX_OUTPUT_TOKENS, MAX_AGENT_MAX_OUTPUT_TOKENS)
+                .let { it - it % AGENT_MAX_OUTPUT_STEP }
+
+        fun setAgentSettings(context: Context, contextLength: Int, maxOutputTokens: Int) {
+            val safeContext = contextLength.coerceIn(MIN_AGENT_CONTEXT_LENGTH, MAX_AGENT_CONTEXT_LENGTH)
+                .let { it - it % AGENT_CONTEXT_STEP }
+            val safeOutput = maxOutputTokens.coerceIn(
+                MIN_AGENT_MAX_OUTPUT_TOKENS,
+                MAX_AGENT_MAX_OUTPUT_TOKENS,
+            ).let { it - it % AGENT_MAX_OUTPUT_STEP }
+            prefs(context).edit()
+                .putInt(KEY_AGENT_CONTEXT_LENGTH, safeContext)
+                .putInt(KEY_AGENT_MAX_OUTPUT_TOKENS, safeOutput)
+                .apply()
         }
 
         fun getEnableThinking(context: Context): Boolean =
@@ -892,6 +926,9 @@ class LlamaEngine private constructor(
     private external fun setMinicpmvVersionNative(version: Int)
     // MiniCPM5 / V-4.6 thinking toggle. Default off.
     private external fun setEnableThinkingNative(enable: Boolean)
+    // Expands the native KV cache while Agent mode is active. The next
+    // fullReset recreates the context using the selected size.
+    private external fun setAgentContextSizeNative(contextLength: Int)
     // 0 if no mmproj is loaded.  46 / 460 / 461 = MiniCPM-V-4.6 family.
     // Used by [isVideoUnderstandingSupported] to gate the video path.
     private external fun getMinicpmvVersionNative(): Int
@@ -901,7 +938,8 @@ class LlamaEngine private constructor(
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
     private external fun generateNextToken(): String?
     private external fun prefillImage(imageData: ByteArray, imageSize: Int): Int
-    private external fun fullReset()
+    /** Recreates the context and returns the applied n_ctx, or zero on failure. */
+    private external fun fullReset(): Int
     private external fun nativeCancelGeneration()
     private external fun unload()
     private external fun shutdown()
@@ -1155,9 +1193,27 @@ class LlamaEngine private constructor(
             check(_state.value is LlamaState.ModelReady) {
                 "Cannot clear context in ${_state.value.javaClass.simpleName}"
             }
-            fullReset()
+            check(fullReset() > 0) { "Failed to recreate model context" }
             _readyForSystemPrompt = true
             Log.i(TAG, "Context fully reset - context recreated, ready for new conversation")
+        }
+
+    suspend fun configureAgentContext(enable: Boolean) =
+        withContext(llamaDispatcher) {
+            check(_state.value is LlamaState.ModelReady) {
+                "Cannot configure Agent context in ${_state.value.javaClass.simpleName}"
+            }
+            val contextLength = if (enable) getAgentContextLength(context) else 0
+            setAgentContextSizeNative(contextLength)
+            val appliedContextLength = fullReset()
+            check(appliedContextLength > 0) { "Failed to recreate model context" }
+            if (enable && appliedContextLength != contextLength) {
+                // Native allocation can fall back on memory-constrained devices.
+                // Persist the actual value so the UI and Koog metadata stay aligned.
+                setAgentSettings(context, appliedContextLength, getAgentMaxOutputTokens(context))
+            }
+            _readyForSystemPrompt = true
+            Log.i(TAG, "Agent context ${if (enable) "enabled ($appliedContextLength)" else "disabled (model default)"}")
         }
 
     fun sendUserPrompt(

@@ -112,6 +112,17 @@ class AgentSandbox(context: Context) {
             .toString()
     }
 
+    suspend fun runPythonFile(path: String, timeoutSeconds: Int): String {
+        val code = withContext(Dispatchers.IO) {
+            val target = resolve(path)
+            require(target.isFile) { "Not a file: $path" }
+            require(target.extension.equals("py", ignoreCase = true)) { "Python file must end in .py" }
+            require(target.length() <= MAX_PYTHON_CHARS) { "Python source is too large" }
+            target.readText()
+        }
+        return runPython(code, timeoutSeconds)
+    }
+
     private fun ensurePythonStarted() {
         if (Python.isStarted()) return
         synchronized(Python::class.java) {

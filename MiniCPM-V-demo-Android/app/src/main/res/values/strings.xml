@@ -169,6 +169,14 @@
     <!-- Language picker -->
     <string name="settings_language">语言</string>
     <string name="language_picker_title">选择语言</string>
+    <string name="agent_settings">Agent 设置</string>
+    <string name="agent_settings_description">上下文 / 单轮输出 token</string>
+    <string name="agent_settings_dialog_title">Agent 生成参数</string>
+    <string name="agent_context_length">上下文长度 (token)</string>
+    <string name="agent_context_hint">仅在 Agent 模式中使用。越大越不容易被截断，但会占用更多内存；需重建 KV cache 后生效。</string>
+    <string name="agent_max_output">单轮最大输出 (token)</string>
+    <string name="agent_max_output_hint">限制每一轮 LLM 文本的最大生成长度，下一次 Agent 请求生效。</string>
+    <string name="agent_settings_saved">Agent 设置已保存：%1$d / %2$d</string>
 
     <!-- TTS Activity -->
     <string name="tts_title">语音合成 (VoxCPM2)</string>
