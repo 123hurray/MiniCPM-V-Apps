@@ -15,12 +15,10 @@ android {
 
     defaultConfig {
         applicationId = "com.example.minicpm_v_demo"
-        // minSdk = 24 (Android 7.0) covers ~99% of in-use devices.
-        // The native code only requires arm64-v8a (Android 5.0+), and the
-        // app itself uses no Android 13+ APIs. The adaptive icon XML is
-        // placed under mipmap-anydpi-v26/ so pre-Oreo devices fall back
-        // to the WebP icons in mipmap-{m,h,xh,xxh,xxxh}dpi/.
-        minSdk = 24
+        // Koog 1.2 targets JVM 17 and its stable dependency graph uses
+        // MethodHandle APIs available from Android 8.0 onward.
+        // This sets Android 8.0 (Oreo) as the minimum supported release.
+        minSdk = 26
         targetSdk = 36
         versionCode = 19
         versionName = "2.7"
@@ -83,8 +81,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     externalNativeBuild {
         cmake {
