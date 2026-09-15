@@ -45,9 +45,9 @@ constexpr int   V46_CONTEXT_SIZE        = 8192;
 constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 2048;
 // Aligned with the model's generation_config.json (do_sample=true,
-// temperature=0.7, top_k=0, top_p=1.0, repetition_penalty=1.0). top_k=0 and
-// top_p=1.0 effectively disable those filters, so sampling is pure
-// temperature-only as the model card recommends.
+// temperature=0.7, top_k=0, top_p=1.0, min_p=0.0,
+// repetition_penalty=1.0). MiniCPM5's model card explicitly warns that
+// llama.cpp's min_p=0.05 default can trap the model in repetition loops.
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.7f;
 
 static llama_model                      * g_model;
@@ -301,6 +301,7 @@ static common_sampler *new_sampler(float temp) {
     sparams.temp = temp;
     sparams.top_k = 0;            // disabled
     sparams.top_p = 1.0f;         // disabled
+    sparams.min_p = 0.0f;         // disabled; required by MiniCPM5 model card
     sparams.penalty_repeat = 1.0f; // disabled
     return common_sampler_init(g_model, sparams);
 }
