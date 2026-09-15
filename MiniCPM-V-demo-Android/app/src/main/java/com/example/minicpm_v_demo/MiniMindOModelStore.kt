@@ -24,26 +24,26 @@ object MiniMindOModelStore {
 
     // These are Android-specific ExecuTorch exports derived from the
     // Apache-2.0 MiniMind-O checkpoints. They live in a release rather than
-    // the APK so an install/update never duplicates ~460 MB of model data.
+    // the APK so an install/update never duplicates ~493 MiB of model data.
     val assets = listOf(
         Asset(
             "minimind-o-main-int8.pte",
-            "https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-main-int8.pte",
+            "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-main-int8.pte",
             "016af26199668483fca2f20b603ddb0889977de7d8eb00ea7734673ee7f832e6",
         ),
         Asset(
             "minimind-o-sensevoice-int8.pte",
-            "https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-sensevoice-int8.pte",
+            "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-sensevoice-int8.pte",
             "d7cf94ac2a26bb7ab4947182ffbfa9ea2b4c6fb8ba28692d71568ebe8b41eac3",
         ),
         Asset(
             "minimind-o-mimi-int8.pte",
-            "https://github.com/OpenBMB/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-mimi-int8.pte",
+            "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-mimi-int8.pte",
             "c1c51e4bd0fb0b87efa7087a08fa126aa08326527e0cb474bcb765b5ea58cdb1",
         ),
         Asset(
             "tokenizer.json",
-            "https://huggingface.co/jingyaogong/minimind-3o/resolve/main/tokenizer.json",
+            "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/tokenizer.json",
             "71f32c68cf63a15355a8fc171b7594b3d41870fe0ddb54fc6aefa55f73a4a668",
         ),
     )
