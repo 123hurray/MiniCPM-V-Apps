@@ -5,10 +5,11 @@ import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
+import kotlinx.coroutines.CancellationException
 
 internal class AgentTools(
     private val sandbox: AgentSandbox,
-    private val onActivity: suspend (String) -> Unit,
+    private val onTrace: suspend (AgentTraceEvent) -> Unit,
 ) {
     @Serializable
     data class ProtocolErrorArgs(
@@ -62,10 +63,8 @@ internal class AgentTools(
         name = "list_files",
         description = "List files in the private Agent workspace. Paths must be relative.",
     ) {
-        override suspend fun execute(args: ListFilesArgs): String {
-            onActivity(name)
-            return sandbox.listFiles(args.path, args.recursive)
-        }
+        override suspend fun execute(args: ListFilesArgs): String =
+            executeTraced(name) { sandbox.listFiles(args.path, args.recursive) }
     }
 
     private val readFile = object : SimpleTool<ReadFileArgs>(
@@ -73,10 +72,8 @@ internal class AgentTools(
         name = "read_file",
         description = "Read a UTF-8 text file from the private Agent workspace.",
     ) {
-        override suspend fun execute(args: ReadFileArgs): String {
-            onActivity(name)
-            return sandbox.readFile(args.path, args.maxChars)
-        }
+        override suspend fun execute(args: ReadFileArgs): String =
+            executeTraced(name) { sandbox.readFile(args.path, args.maxChars) }
     }
 
     private val writeFile = object : SimpleTool<WriteFileArgs>(
@@ -84,10 +81,8 @@ internal class AgentTools(
         name = "write_file",
         description = "Write or append UTF-8 text in the private Agent workspace.",
     ) {
-        override suspend fun execute(args: WriteFileArgs): String {
-            onActivity(name)
-            return sandbox.writeFile(args.path, args.content, args.append)
-        }
+        override suspend fun execute(args: WriteFileArgs): String =
+            executeTraced(name) { sandbox.writeFile(args.path, args.content, args.append) }
     }
 
     private val runShell = object : SimpleTool<ShellArgs>(
@@ -95,10 +90,8 @@ internal class AgentTools(
         name = "run_shell",
         description = "Run an allowlisted Android shell command in the private Agent workspace.",
     ) {
-        override suspend fun execute(args: ShellArgs): String {
-            onActivity(name)
-            return sandbox.runShell(args.command, args.timeoutSeconds)
-        }
+        override suspend fun execute(args: ShellArgs): String =
+            executeTraced(name) { sandbox.runShell(args.command, args.timeoutSeconds) }
     }
 
     private val runPython = object : SimpleTool<PythonArgs>(
@@ -106,10 +99,8 @@ internal class AgentTools(
         name = "run_python",
         description = "Run a Python 3.12 script in the private Agent workspace.",
     ) {
-        override suspend fun execute(args: PythonArgs): String {
-            onActivity(name)
-            return sandbox.runPython(args.code, args.timeoutSeconds)
-        }
+        override suspend fun execute(args: PythonArgs): String =
+            executeTraced(name) { sandbox.runPython(args.code, args.timeoutSeconds) }
     }
 
     /**
@@ -138,6 +129,23 @@ internal class AgentTools(
         tool(runShell)
         tool(runPython)
         tool(protocolError)
+    }
+
+    private suspend fun executeTraced(tool: String, block: suspend () -> String): String {
+        val result = try {
+            block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val message = "TOOL_EXECUTION_ERROR\n${error.message ?: error.javaClass.simpleName}"
+            onTrace(AgentTraceEvent.ToolResult(tool, message, isError = true))
+            return message
+        }
+        val isError = result.contains("\"status\": \"error\"") ||
+            result.contains("\"status\":\"error\"") ||
+            Regex("exit_code=(?!0(?:\\s|$))\\d+").containsMatchIn(result)
+        onTrace(AgentTraceEvent.ToolResult(tool, result, isError))
+        return result
     }
 
     companion object {

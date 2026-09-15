@@ -71,4 +71,51 @@ class ToolCallProtocolTest {
         val result = ToolCallProtocol.parse("The command completed successfully.", tools, required)
         assertTrue(result is ToolCallProtocol.Result.NotAToolCall)
     }
+
+    @Test
+    fun parsesMultilineRawPythonWithoutJsonEscaping() {
+        val result = ToolCallProtocol.parse(
+            """
+                <tool_call name="run_python">
+                def quicksort(values):
+                    return sorted(values)
+
+                print(quicksort([3, 1, 2]))
+                </tool_call>
+            """.trimIndent(),
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("run_python", result.tool)
+        assertTrue(result.arguments["code"].toString().contains("def quicksort"))
+        assertTrue(result.arguments["code"].toString().contains("print(quicksort"))
+    }
+
+    @Test
+    fun parsesRawShellCommand() {
+        val result = ToolCallProtocol.parse(
+            "<tool_call name='run_shell'>echo 1</tool_call>",
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Valid)
+        result as ToolCallProtocol.Result.Valid
+        assertEquals("run_shell", result.tool)
+        assertEquals("echo 1", result.arguments["command"].toString().trim('"'))
+    }
+
+    @Test
+    fun incompleteRawBlockReturnsProtocolError() {
+        val result = ToolCallProtocol.parse(
+            "<tool_call name=\"run_python\">print(1)",
+            tools,
+            required,
+        )
+
+        assertTrue(result is ToolCallProtocol.Result.Invalid)
+    }
 }

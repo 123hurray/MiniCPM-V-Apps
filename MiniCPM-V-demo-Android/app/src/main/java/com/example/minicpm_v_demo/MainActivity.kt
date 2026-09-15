@@ -408,6 +408,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
         isAgentMode = enabled
+        val model = LlamaEngine.getSelectedModel(applicationContext)
+        if (enabled && model.supportsThinking && !LlamaEngine.getEnableThinking(this)) {
+            // Agent mode exposes the model's planning trace, so enable the
+            // model's native thinking stream when entering the mode.
+            engine.setEnableThinking(true)
+            refreshThinkButton()
+        }
         refreshAgentButton()
         enableInput(false)
         lifecycleScope.launch(Dispatchers.IO) {
@@ -760,25 +767,29 @@ class MainActivity : AppCompatActivity() {
     ): Job =
         lifecycleScope.launch(Dispatchers.Default) {
             val agent = TextModelAgent(applicationContext, engine)
+            val trace = mutableListOf<AgentTraceEvent>(
+                AgentTraceEvent.Progress(getString(R.string.agent_working))
+            )
             try {
-                updateAgentMessage(aiMsgId, getString(R.string.agent_working), true)
-                val answer = agent.run(userMsg, history) { toolName ->
-                    updateAgentMessage(
-                        aiMsgId,
-                        getString(R.string.agent_using_tool, toolName),
-                        true
-                    )
+                updateAgentMessage(aiMsgId, AgentTraceFormatter.render(trace), true)
+                val answer = agent.run(userMsg, history) { event ->
+                    trace.add(event)
+                    updateAgentMessage(aiMsgId, AgentTraceFormatter.render(trace), true)
                 }
-                updateAgentMessage(aiMsgId, answer, false)
+                updateAgentMessage(aiMsgId, AgentTraceFormatter.render(trace, answer), false)
                 withContext(Dispatchers.Main) {
                     agentHistory.add(AgentConversationTurn(userMsg, answer))
                     while (agentHistory.size > MAX_AGENT_HISTORY_TURNS) agentHistory.removeAt(0)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Agent execution failed", e)
+                trace.add(AgentTraceEvent.ProtocolFeedback(e.message ?: e.javaClass.simpleName))
                 updateAgentMessage(
                     aiMsgId,
-                    getString(R.string.agent_failed, e.message ?: e.javaClass.simpleName),
+                    AgentTraceFormatter.render(
+                        trace,
+                        getString(R.string.agent_failed, e.message ?: e.javaClass.simpleName)
+                    ),
                     false
                 )
             } finally {

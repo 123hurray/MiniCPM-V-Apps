@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class MiniCpmKoogClient(
     private val engine: LlamaEngine,
     private val provider: LLMProvider,
+    private val onTrace: suspend (AgentTraceEvent) -> Unit,
 ) : LLMClient() {
 
     override suspend fun execute(
@@ -33,6 +34,9 @@ internal class MiniCpmKoogClient(
             response.append(token)
         }
         val rawResponse = response.toString().trim()
+        extractThinking(rawResponse)?.takeIf { it.isNotBlank() }?.let { thinking ->
+            onTrace(AgentTraceEvent.Thought(thinking))
+        }
         val callableDescriptors = tools.filterNot { it.name == AgentTools.PROTOCOL_ERROR_TOOL }
         val callableTools = callableDescriptors.mapTo(linkedSetOf()) { it.name }
         val requiredArguments = callableDescriptors.associate { descriptor ->
@@ -41,35 +45,39 @@ internal class MiniCpmKoogClient(
         return when (
             val parsed = ToolCallProtocol.parse(rawResponse, callableTools, requiredArguments)
         ) {
-            is ToolCallProtocol.Result.Valid -> Message.Assistant(
-                parts = listOf(
-                    MessagePart.Tool.Call(
-                        id = "local_tool_${toolCallId.incrementAndGet()}",
-                        tool = parsed.tool,
-                        args = parsed.arguments,
-                    )
-                ),
-                metaInfo = ResponseMetaInfo.Empty,
-                finishReason = "tool_calls",
-            )
+            is ToolCallProtocol.Result.Valid -> {
+                onTrace(AgentTraceEvent.ToolCall(parsed.tool, parsed.arguments.toString()))
+                Message.Assistant(
+                    parts = listOf(
+                        MessagePart.Tool.Call(
+                            id = "local_tool_${toolCallId.incrementAndGet()}",
+                            tool = parsed.tool,
+                            args = parsed.arguments,
+                        )
+                    ),
+                    metaInfo = ResponseMetaInfo.Empty,
+                    finishReason = "tool_calls",
+                )
+            }
 
-            is ToolCallProtocol.Result.Invalid -> Message.Assistant(
-                parts = listOf(
-                    MessagePart.Tool.Call(
-                        id = "protocol_error_${toolCallId.incrementAndGet()}",
-                        tool = AgentTools.PROTOCOL_ERROR_TOOL,
-                        args = buildJsonObject { put("message", parsed.feedback) },
-                    )
-                ),
-                metaInfo = ResponseMetaInfo.Empty,
-                finishReason = "tool_calls",
-            )
+            is ToolCallProtocol.Result.Invalid -> protocolErrorMessage(parsed.feedback)
 
-            ToolCallProtocol.Result.NotAToolCall -> Message.Assistant(
-                content = rawResponse,
-                metaInfo = ResponseMetaInfo.Empty,
-                finishReason = "stop",
-            )
+            ToolCallProtocol.Result.NotAToolCall -> {
+                val feedback = ToolUseGuard.continuationFeedback(
+                    userRequest = currentUserRequest(prompt),
+                    assistantResponse = stripThinking(rawResponse),
+                    hasSuccessfulToolResult = hasSuccessfulToolResult(prompt),
+                )
+                if (feedback != null) {
+                    protocolErrorMessage(feedback)
+                } else {
+                    Message.Assistant(
+                        content = stripThinking(rawResponse),
+                        metaInfo = ResponseMetaInfo.Empty,
+                        finishReason = "stop",
+                    )
+                }
+            }
         }
     }
 
@@ -99,16 +107,63 @@ internal class MiniCpmKoogClient(
             Available tools:
             $toolText
 
-            To call exactly one tool, reply with ONLY one JSON object using this exact shape:
+            To call exactly one structured file tool, reply with ONLY one JSON object using this exact shape:
             {"tool":"tool_name","arguments":{"argument":"value"}}
-            Valid shell example:
-            {"tool":"run_shell","arguments":{"command":"echo 'hello from agent'","timeoutSeconds":15}}
+            For Python and shell, prefer a raw tool block so code does not need JSON escaping:
+            <tool_call name="run_python">
+            print("hello from Python")
+            </tool_call>
+            <tool_call name="run_shell">
+            echo 'hello from shell'
+            </tool_call>
             Do not wrap a tool call in Markdown. After receiving a tool result, either call another tool or answer normally.
-            JSON strings must escape double quotes. Never include a newline in a shell command.
-            If a TOOL_CALL_FORMAT_ERROR result is returned, correct the JSON and try the tool call again immediately.
+            A raw block's body is passed verbatim as code or command. Shell remains single-line; Python may be multiline.
+            JSON strings must escape double quotes. If a TOOL_CALL_FORMAT_ERROR result is returned, correct the call
+            and try the tool immediately. A promise to try a tool is not a tool call and must not be your final answer.
             Never invent tool output. Prefer list_files before assuming a file exists.
         """.trimIndent()
     }
+
+    private suspend fun protocolErrorMessage(feedback: String): Message.Assistant {
+        onTrace(AgentTraceEvent.ProtocolFeedback(feedback))
+        return Message.Assistant(
+            parts = listOf(
+                MessagePart.Tool.Call(
+                    id = "protocol_error_${toolCallId.incrementAndGet()}",
+                    tool = AgentTools.PROTOCOL_ERROR_TOOL,
+                    args = buildJsonObject { put("message", feedback) },
+                )
+            ),
+            metaInfo = ResponseMetaInfo.Empty,
+            finishReason = "tool_calls",
+        )
+    }
+
+    private fun currentUserRequest(prompt: Prompt): String = prompt.messages
+        .filterIsInstance<Message.User>()
+        .lastOrNull()
+        ?.textContent()
+        .orEmpty()
+
+    private fun hasSuccessfulToolResult(prompt: Prompt): Boolean = prompt.messages.any { message ->
+        message.parts.filterIsInstance<MessagePart.Tool.Result>().any { result ->
+            result.tool != AgentTools.PROTOCOL_ERROR_TOOL && !toolOutputFailed(result.output)
+        }
+    }
+
+    private fun toolOutputFailed(output: String): Boolean {
+        val normalized = output.lowercase()
+        return "tool_execution_error" in normalized ||
+            "\"status\": \"error\"" in normalized ||
+            "\"status\":\"error\"" in normalized ||
+            Regex("exit_code=(?!0(?:\\s|$))\\d+").containsMatchIn(normalized)
+    }
+
+    private fun extractThinking(response: String): String? =
+        THINKING.find(response)?.groupValues?.getOrNull(1)?.trim()
+
+    private fun stripThinking(response: String): String =
+        response.replace(THINKING, "").trim()
 
     private fun buildConversation(prompt: Prompt): String = buildString {
         prompt.messages.filterNot { it is Message.System }.forEach { message ->
@@ -138,5 +193,6 @@ internal class MiniCpmKoogClient(
 
     private companion object {
         val toolCallId = AtomicInteger(0)
+        val THINKING = Regex("(?s)<think>(.*?)</think>\\s*", RegexOption.IGNORE_CASE)
     }
 }

@@ -5,7 +5,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /** Converts the local model's text protocol into a typed Koog tool call. */
 internal object ToolCallProtocol {
@@ -26,6 +28,7 @@ internal object ToolCallProtocol {
         requiredArguments: Map<String, Set<String>> = emptyMap(),
     ): Result {
         val candidate = unwrap(rawResponse)
+        parseRawBody(candidate, allowedTools)?.let { return it }
         if (!looksLikeToolCall(candidate, allowedTools)) return Result.NotAToolCall
 
         val root = runCatching { json.parseToJsonElement(candidate).jsonObject }
@@ -71,6 +74,34 @@ internal object ToolCallProtocol {
         return Result.Valid(tool, arguments)
     }
 
+    private fun parseRawBody(candidate: String, allowedTools: Set<String>): Result? {
+        val match = RAW_TOOL_CALL.matchEntire(candidate) ?: return if (
+            candidate.startsWith("<tool_call", ignoreCase = true)
+        ) {
+            Result.Invalid(
+                "The raw tool block is incomplete. Close it with </tool_call>, or return one valid JSON object."
+            )
+        } else {
+            null
+        }
+        val tool = match.groupValues[1]
+        if (tool !in allowedTools) {
+            return Result.Invalid(
+                "Unknown tool '$tool'. Available tools: ${allowedTools.sorted().joinToString(", ")}."
+            )
+        }
+        val argumentName = when (tool) {
+            "run_python" -> "code"
+            "run_shell" -> "command"
+            else -> return Result.Invalid(
+                "Raw tool blocks are supported only for run_python and run_shell. Use JSON for '$tool'."
+            )
+        }
+        val body = match.groupValues[2].trim('\n', '\r')
+        if (body.isBlank()) return Result.Invalid("Raw tool block for '$tool' is empty.")
+        return Result.Valid(tool, buildJsonObject { put(argumentName, body) })
+    }
+
     private fun unwrap(raw: String): String {
         var text = raw.trim()
         text = text.replace(Regex("(?s)^<think>.*?</think>\\s*"), "").trim()
@@ -98,4 +129,8 @@ internal object ToolCallProtocol {
 
     private val TOOL_KEY = Regex("\"(?:tool|name|tool_name)\"\\s*:")
     private val FUNCTION_KEY = Regex("\"function\"\\s*:")
+    private val RAW_TOOL_CALL = Regex(
+        "(?s)^\\s*<tool_call\\s+name\\s*=\\s*[\"']([A-Za-z0-9_-]+)[\"']\\s*>\\s*(.*?)\\s*</tool_call>\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
 }

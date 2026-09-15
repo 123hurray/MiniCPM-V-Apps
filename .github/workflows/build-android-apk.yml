@@ -39,28 +39,29 @@ jobs:
             "ndk;27.0.12077973" \
             "cmake;4.1.2"
 
-      - name: Run unit tests and build debug APK
+      - name: Run unit tests and build unsigned release APK
         working-directory: MiniCPM-V-demo-Android
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
 
-      - name: Prepare APK
+      - name: Prepare signing inputs
         run: |
-          cp MiniCPM-V-demo-Android/app/build/outputs/apk/debug/app-debug.apk \
-            MiniCPM-V-demo-Android-v2.8.apk
+          cp MiniCPM-V-demo-Android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            MiniCPM-V-demo-Android-v2.9-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
 
-      - name: Verify APK metadata and signature
+      - name: Verify APK metadata
         run: |
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
-          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-          "$AAPT" dump badging MiniCPM-V-demo-Android-v2.8.apk | tee /tmp/apk-badging.txt
-          grep -F "package: name='com.example.minicpm_v_demo' versionCode='20' versionName='2.8'" \
+          "$AAPT" dump badging MiniCPM-V-demo-Android-v2.9-unsigned.apk | tee /tmp/apk-badging.txt
+          grep -F "package: name='com.example.minicpm_v_demo' versionCode='21' versionName='2.9'" \
             /tmp/apk-badging.txt
-          "$APKSIGNER" verify --verbose MiniCPM-V-demo-Android-v2.8.apk
 
-      - name: Upload APK
+      - name: Upload unsigned APK and signer
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCPM-V-demo-Android-v2.8
-          path: MiniCPM-V-demo-Android-v2.8.apk
+          name: MiniCPM-V-demo-Android-v2.9-signing-inputs
+          path: |
+            MiniCPM-V-demo-Android-v2.9-unsigned.apk
+            apksigner.jar
           if-no-files-found: error
           retention-days: 30

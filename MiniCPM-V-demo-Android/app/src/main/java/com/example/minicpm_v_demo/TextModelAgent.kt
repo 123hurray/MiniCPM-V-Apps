@@ -24,12 +24,12 @@ internal class TextModelAgent(
     suspend fun run(
         task: String,
         history: List<AgentConversationTurn> = emptyList(),
-        onToolActivity: suspend (String) -> Unit,
+        onTrace: suspend (AgentTraceEvent) -> Unit,
     ): String {
         val selectedModel = LlamaEngine.getSelectedModel(appContext)
         require(selectedModel.isTextOnly) { "Agent mode only supports text-only models" }
 
-        val tools = AgentTools(sandbox, onToolActivity)
+        val tools = AgentTools(sandbox, onTrace)
         val provider = LLMProvider("minicpm-local", "MiniCPM Local")
         val model = LLModel(
             provider = provider,
@@ -38,7 +38,7 @@ internal class TextModelAgent(
             contextLength = 4096,
             maxOutputTokens = 1536,
         )
-        val client = MiniCpmKoogClient(engine, provider)
+        val client = MiniCpmKoogClient(engine, provider, onTrace)
         val executor = MultiLLMPromptExecutor(client)
         val agent = AIAgent(
             promptExecutor = executor,
@@ -46,7 +46,7 @@ internal class TextModelAgent(
             toolRegistry = tools.registry,
             systemPrompt = SYSTEM_PROMPT,
             temperature = 0.0,
-            maxIterations = 10,
+            maxIterations = 16,
             responseProcessor = ManualToolCallFixProcessor(tools.registry),
         )
         return try {
@@ -77,6 +77,8 @@ internal class TextModelAgent(
             All paths are relative to that workspace. Do not claim to access files outside it.
             When the user asks to test a tool, call that tool directly with a harmless concrete example.
             A tool call is not complete until you receive and inspect its actual TOOL RESULT.
+            If a tool call fails or its format is rejected, inspect the feedback, correct it, and continue.
+            Never end with a promise such as "I will try"; perform the promised tool call in the same run.
             Use at most the calls needed to complete the task. When done, return a clear final answer in the user's language.
         """.trimIndent()
 
