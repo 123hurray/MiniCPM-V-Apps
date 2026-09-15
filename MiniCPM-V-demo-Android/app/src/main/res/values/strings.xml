@@ -24,6 +24,16 @@
     <string name="hint_input">发消息</string>
     <string name="add_image">添加图片</string>
     <string name="think_toggle">思考</string>
+    <string name="agent_toggle">Agent</string>
+    <string name="agent_enable_title">启用本地 Agent</string>
+    <string name="agent_enable_message">Agent 可在应用专属工作区内读写文件、执行受限 Shell 命令和运行 Python 脚本。所有操作都在本机完成，但仍可能修改或删除 Agent 工作区中的文件。\n\n工作区：files/agent_workspace</string>
+    <string name="agent_enable">启用</string>
+    <string name="agent_mode_enabled">Agent 模式已启用</string>
+    <string name="agent_mode_disabled">Agent 模式已关闭</string>
+    <string name="agent_working">Agent 正在规划…</string>
+    <string name="agent_using_tool">Agent 正在调用 %1$s…</string>
+    <string name="agent_failed">Agent 执行失败：%1$s</string>
+    <string name="agent_text_only">Agent 仅支持纯文本模型</string>
     <string name="send">发送</string>
     <string name="stop_generating">终止生成</string>
     <string name="image_desc">图片</string>

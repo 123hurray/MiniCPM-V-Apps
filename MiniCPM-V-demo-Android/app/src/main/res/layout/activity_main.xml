@@ -170,6 +170,26 @@
                     app:strokeWidth="1dp"
                     android:contentDescription="@string/think_toggle" />
 
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_agent"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginEnd="4dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="@string/agent_toggle"
+                    android:textSize="12sp"
+                    android:visibility="gone"
+                    android:checkable="true"
+                    android:checked="false"
+                    app:cornerRadius="16dp"
+                    app:strokeWidth="1dp"
+                    android:contentDescription="@string/agent_toggle" />
+
                 <ImageButton
                     android:id="@+id/btn_send"
                     android:layout_width="40dp"

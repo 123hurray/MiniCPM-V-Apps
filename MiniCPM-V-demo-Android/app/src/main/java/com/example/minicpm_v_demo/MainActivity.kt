@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSend: ImageButton
     private lateinit var btnImage: ImageButton
     private lateinit var btnThink: MaterialButton
+    private lateinit var btnAgent: MaterialButton
     private lateinit var btnClearChat: ImageButton
     private lateinit var btnModelManager: ImageButton
     private lateinit var btnImageSlice: ImageButton
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private val messages = mutableListOf<ChatMessage>()
     private var createdWithLocale: String? = null
     private var isLocaleRestart = false
+    private var isAgentMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         btnSend = findViewById(R.id.btn_send)
         btnImage = findViewById(R.id.btn_image)
         btnThink = findViewById(R.id.btn_think)
+        btnAgent = findViewById(R.id.btn_agent)
         btnClearChat = findViewById(R.id.btn_clear_chat)
         btnModelManager = findViewById(R.id.btn_model_manager)
         btnImageSlice = findViewById(R.id.btn_image_slice)
@@ -161,6 +164,7 @@ class MainActivity : AppCompatActivity() {
             engine.setEnableThinking(next)
             refreshThinkButton()
         }
+        btnAgent.setOnClickListener { handleAgentToggle() }
         btnSend.setOnClickListener { handleUserInput() }
         btnClearChat.setOnClickListener { showClearChatDialog() }
         btnModelManager.setOnClickListener {
@@ -328,6 +332,8 @@ class MainActivity : AppCompatActivity() {
     private fun enableInput(enable: Boolean) {
         etInput.isEnabled = enable
         btnSend.isEnabled = enable
+        btnAgent.isEnabled = enable &&
+            LlamaEngine.getSelectedModel(applicationContext).isTextOnly
         if (!enable) {
             btnImage.isEnabled = false
         } else {
@@ -349,6 +355,11 @@ class MainActivity : AppCompatActivity() {
         btnImageSlice.visibility = if (isVision) View.VISIBLE else View.GONE
         btnImage.isEnabled = isVision
         btnThink.visibility = if (model.supportsThinking) View.VISIBLE else View.GONE
+        btnAgent.visibility = if (model.isTextOnly) View.VISIBLE else View.GONE
+        if (!model.isTextOnly) {
+            isAgentMode = false
+        }
+        refreshAgentButton()
         if (model.supportsThinking) {
             refreshThinkButton()
         }
@@ -360,6 +371,61 @@ class MainActivity : AppCompatActivity() {
         val on = LlamaEngine.getEnableThinking(this)
         btnThink.isChecked = on
         btnThink.alpha = if (on) 1f else 0.7f
+    }
+
+    private fun handleAgentToggle() {
+        val model = LlamaEngine.getSelectedModel(applicationContext)
+        if (!model.isTextOnly) {
+            btnAgent.isChecked = false
+            Toast.makeText(this, R.string.agent_text_only, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (btnAgent.isChecked) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.agent_enable_title)
+                .setMessage(R.string.agent_enable_message)
+                .setPositiveButton(R.string.agent_enable) { _, _ -> switchAgentMode(true) }
+                .setNegativeButton(R.string.cancel) { _, _ ->
+                    isAgentMode = false
+                    refreshAgentButton()
+                }
+                .setOnCancelListener {
+                    isAgentMode = false
+                    refreshAgentButton()
+                }
+                .show()
+        } else {
+            switchAgentMode(false)
+        }
+    }
+
+    private fun switchAgentMode(enabled: Boolean) {
+        if (isAgentMode == enabled) {
+            refreshAgentButton()
+            return
+        }
+        isAgentMode = enabled
+        refreshAgentButton()
+        enableInput(false)
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching { engine.clearContext() }
+                .onFailure { Log.w(TAG, "Failed to reset context while switching Agent mode", it) }
+            withContext(Dispatchers.Main) {
+                clearChatUI()
+                enableInput(true)
+                Toast.makeText(
+                    this@MainActivity,
+                    if (enabled) R.string.agent_mode_enabled else R.string.agent_mode_disabled,
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    private fun refreshAgentButton() {
+        btnAgent.isChecked = isAgentMode
+        btnAgent.alpha = if (isAgentMode) 1f else 0.7f
     }
 
     private fun refreshWelcomeCard(isTextOnly: Boolean) {
@@ -645,7 +711,9 @@ class MainActivity : AppCompatActivity() {
             scrollToBottom()
         }
 
-        generationJob = lifecycleScope.launch(Dispatchers.Default) {
+        generationJob = if (isAgentMode) {
+            runAgentRequest(userMsg, aiMsgId)
+        } else lifecycleScope.launch(Dispatchers.Default) {
             val fullResponse = StringBuilder()
             engine.sendUserPrompt(userMsg)
                 .onCompletion {
@@ -680,6 +748,52 @@ class MainActivity : AppCompatActivity() {
                         scrollToBottom()
                     }
                 }
+        }
+    }
+
+    private fun runAgentRequest(userMsg: String, aiMsgId: Long): Job =
+        lifecycleScope.launch(Dispatchers.Default) {
+            val agent = TextModelAgent(applicationContext, engine)
+            try {
+                updateAgentMessage(aiMsgId, getString(R.string.agent_working), true)
+                val answer = agent.run(userMsg) { toolName ->
+                    updateAgentMessage(
+                        aiMsgId,
+                        getString(R.string.agent_using_tool, toolName),
+                        true
+                    )
+                }
+                updateAgentMessage(aiMsgId, answer, false)
+            } catch (e: Exception) {
+                Log.e(TAG, "Agent execution failed", e)
+                updateAgentMessage(
+                    aiMsgId,
+                    getString(R.string.agent_failed, e.message ?: e.javaClass.simpleName),
+                    false
+                )
+            } finally {
+                withContext(Dispatchers.Main) {
+                    chatAdapter.setGeneratingDone(aiMsgId)
+                    chatAdapter.clearActiveAiMessage()
+                    enableInput(engine.state.value is LlamaState.ModelReady)
+                    scrollToBottom()
+                }
+            }
+        }
+
+    private suspend fun updateAgentMessage(aiMsgId: Long, text: String, generating: Boolean) {
+        withContext(Dispatchers.Main) {
+            val index = messages.indexOfFirst { it.id == aiMsgId }
+            if (index >= 0) {
+                messages[index] = ChatMessage.AiMessage(
+                    id = aiMsgId,
+                    text = text,
+                    isGenerating = generating
+                )
+                chatAdapter.submitList(messages.toList())
+                chatAdapter.updateStreamingText(aiMsgId, text)
+                scrollToBottom()
+            }
         }
     }
 

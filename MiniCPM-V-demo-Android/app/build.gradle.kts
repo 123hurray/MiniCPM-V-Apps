@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
+    id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.chaquo.python")
 }
 
 android {
@@ -20,8 +22,8 @@ android {
         // to the WebP icons in mipmap-{m,h,xh,xxh,xxxh}dpi/.
         minSdk = 24
         targetSdk = 36
-        versionCode = 18
-        versionName = "2.6"
+        versionCode = 19
+        versionName = "2.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,6 +102,12 @@ android {
     }
 }
 
+chaquopy {
+    defaultConfig {
+        version = "3.12"
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -110,6 +118,11 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+
+    // Mature Kotlin-native agent runtime. A custom LLMClient below bridges
+    // Koog's tool loop to the already-loaded on-device MiniCPM text model.
+    implementation("ai.koog:koog-agents:1.2.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
 
     // Markdown rendering for AI streaming responses (headings, bold, lists, code, etc.)
     implementation("io.noties.markwon:core:4.6.2")
