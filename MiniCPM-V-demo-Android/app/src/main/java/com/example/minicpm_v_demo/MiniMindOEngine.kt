@@ -5,9 +5,13 @@ import org.pytorch.executorch.EValue
 import org.pytorch.executorch.Module
 import org.pytorch.executorch.Tensor
 import java.io.Closeable
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
 import java.util.PriorityQueue
 import kotlin.coroutines.coroutineContext
 import kotlin.math.exp
+import kotlin.math.sqrt
 import kotlin.random.Random
 import kotlinx.coroutines.ensureActive
 
@@ -22,12 +26,26 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         private const val MIMI_WINDOW_FRAMES = 6
         private const val MIMI_OVERLAP_FRAMES = 2
         private const val MIMI_SAMPLES_PER_FRAME = 1920
+        private const val HISTORY_TURNS = 4
+        private const val AUDIO_REPETITION_PENALTY = 1.05f
+        private const val VOICE_SAMPLE_COUNT_16K = 64_000
+        private const val VOICE_SAMPLE_COUNT_24K = 96_000
+        private const val VOICE_MAGIC = 0x4d4d4f56
     }
+
+    private data class ConversationTurn(
+        val projectedAudio: FloatArray,
+        val audioFrames: Int,
+        val assistantText: String,
+    )
 
     private var main: Module? = null
     private var senseVoice: Module? = null
     private var mimi: Module? = null
     private var tokenizer: MiniMindOTokenizer? = null
+    private val history = ArrayDeque<ConversationTurn>()
+    @Volatile private var voiceCodes: LongArray? = null
+    @Volatile private var voiceFrames = 0
 
     fun load(onStatus: (String) -> Unit = {}) {
         check(MiniMindOModelStore.isComplete(context)) { "MiniMind-O 模型尚未下载完整" }
@@ -47,7 +65,71 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         tokenizer = MiniMindOTokenizer(
             MiniMindOModelStore.file(context, "tokenizer.json")
         )
+        loadSavedVoice()
         onStatus("模型已就绪")
+    }
+
+    fun hasVoiceClone(): Boolean = voiceCodes != null && voiceFrames > 0
+
+    fun createVoiceClone(
+        pcm16k: ShortArray,
+        onStatus: (String) -> Unit = {},
+    ): Int {
+        check(pcm16k.size >= VOICE_SAMPLE_COUNT_16K) { "参考语音不足 4 秒" }
+        var energy = 0.0
+        var peak = 0
+        for (index in 0 until VOICE_SAMPLE_COUNT_16K) {
+            val value = pcm16k[index].toInt()
+            energy += value.toDouble() * value
+            peak = maxOf(peak, kotlin.math.abs(value))
+        }
+        val rms = sqrt(energy / VOICE_SAMPLE_COUNT_16K)
+        check(rms >= 260.0) { "参考语音太轻，请靠近麦克风重录" }
+        check(peak < 32_600) { "参考语音有爆音，请离麦克风稍远后重录" }
+
+        onStatus("正在提取克隆音色…")
+        val waveform = FloatArray(VOICE_SAMPLE_COUNT_24K)
+        for (index in waveform.indices) {
+            val source = index * 2f / 3f
+            val left = source.toInt().coerceAtMost(VOICE_SAMPLE_COUNT_16K - 1)
+            val right = (left + 1).coerceAtMost(VOICE_SAMPLE_COUNT_16K - 1)
+            val fraction = source - left
+            waveform[index] = (
+                pcm16k[left] * (1f - fraction) + pcm16k[right] * fraction
+            ) / 32768f
+        }
+        val encoder = Module.load(
+            MiniMindOModelStore.file(context, "minimind-o-mimi-encoder-int8.pte").absolutePath
+        )
+        val (shape, raw) = try {
+            encoder.loadMethod("forward")
+            val output = encoder.forward(
+                EValue.from(
+                    Tensor.fromBlob(waveform, longArrayOf(1, 1, waveform.size.toLong()))
+                )
+            ).last().toTensor()
+            output.shape() to output.dataAsLongArray
+        } finally {
+            encoder.close()
+        }
+        check(shape.size == 3 && shape[0] == 1L && shape[1] >= 8L) {
+            "Mimi encoder 输出形状异常：${shape.contentToString()}"
+        }
+        val frames = shape[2].toInt()
+        val codes = LongArray(8 * frames)
+        for (layer in 0 until 8) {
+            System.arraycopy(raw, layer * frames, codes, layer * frames, frames)
+        }
+        saveVoice(codes, frames)
+        voiceCodes = codes
+        voiceFrames = frames
+        return frames
+    }
+
+    fun deleteVoiceClone() {
+        voiceCodes = null
+        voiceFrames = 0
+        voiceFile().delete()
     }
 
     suspend fun respond(
@@ -78,23 +160,60 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             "SenseVoice 输出形状异常：${senseOutputs.last().toTensor().shape().contentToString()}"
         }
 
-        val audioPrompt = "<|audio_pad|>".repeat(frontend.frameCount)
-        val prompt = "<|im_start|>user\n$audioPrompt<|im_end|>\n" +
-            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-        val promptIds = tok.encode(prompt)
+        val previousTurns = synchronized(history) { history.toMutableList() }
+        fun composePrompt(turns: List<ConversationTurn>): String = buildString {
+            for (turn in turns) {
+                append("<|im_start|>user\n")
+                append("<|audio_pad|>".repeat(turn.audioFrames))
+                append("<|im_end|>\n<|im_start|>assistant\n")
+                append(turn.assistantText)
+                append("<|im_end|>\n")
+            }
+            append("<|im_start|>user\n")
+            append("<|audio_pad|>".repeat(frontend.frameCount))
+            append("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
+        }
+        var retainedTurns = previousTurns
+        var prompt = composePrompt(retainedTurns)
+        var promptIds = tok.encode(prompt)
+        while (retainedTurns.isNotEmpty() && promptIds.size >= CONTEXT - MAX_NEW_TOKENS) {
+            retainedTurns = retainedTurns.drop(1).toMutableList()
+            prompt = composePrompt(retainedTurns)
+            promptIds = tok.encode(prompt)
+        }
         check(promptIds.size < CONTEXT - MAX_NEW_TOKENS) { "本轮语音过长" }
 
         val prefillFeatures = FloatArray(promptIds.size * 768)
         val prefillMask = FloatArray(promptIds.size)
+        val audioSegments = retainedTurns.map { it.projectedAudio to it.audioFrames } +
+            listOf(projected to frontend.frameCount)
+        var segmentIndex = 0
         var audioFrame = 0
         for (index in promptIds.indices) {
-            if (promptIds[index] == 16 && audioFrame < frontend.frameCount) {
-                System.arraycopy(projected, audioFrame * 768, prefillFeatures, index * 768, 768)
+            while (segmentIndex < audioSegments.size && audioFrame >= audioSegments[segmentIndex].second) {
+                segmentIndex++
+                audioFrame = 0
+            }
+            if (promptIds[index] == 16 && segmentIndex < audioSegments.size) {
+                val (segment, frames) = audioSegments[segmentIndex]
+                check(audioFrame < frames)
+                System.arraycopy(segment, audioFrame * 768, prefillFeatures, index * 768, 768)
                 prefillMask[index] = 1f
                 audioFrame++
             }
         }
         val padAudio = LongArray(8 * promptIds.size) { AUDIO_PAD.toLong() }
+        val activeVoice = voiceCodes
+        val activeVoiceFrames = voiceFrames
+        if (activeVoice != null && activeVoiceFrames > 0) {
+            val usedFrames = minOf(activeVoiceFrames, promptIds.size)
+            val destinationStart = promptIds.size - usedFrames
+            val sourceStart = activeVoiceFrames - usedFrames
+            for (layer in 0 until 8) for (frame in 0 until usedFrames) {
+                padAudio[layer * promptIds.size + destinationStart + frame] =
+                    activeVoice[layer * activeVoiceFrames + sourceStart + frame]
+            }
+        }
         onStatus("MiniMind-O 正在回答…")
         var outputs = forwardMain(
             mainModule,
@@ -128,7 +247,14 @@ class MiniMindOEngine(private val context: Context) : Closeable {
                 val code = if (audioStep < layer) {
                     AUDIO_PAD
                 } else {
-                    sample(outputs.second[layer], 50, 1f, 0.20f)
+                    sample(
+                        outputs.second[layer],
+                        50,
+                        1f,
+                        0.20f,
+                        audioCodes[layer].takeLast(3),
+                        AUDIO_REPETITION_PENALTY,
+                    )
                 }
                 audioCodes[layer] += code
                 if (audioStops[layer] < 0 && code >= 2048) audioStops[layer] = audioCodes[layer].lastIndex
@@ -215,8 +341,22 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             onAudio(pcm.copyOfRange(0, end), drop)
             emittedAudio = true
         }
-        if (!emittedAudio) onStatus("本轮未生成可播放语音")
-        onStatus("请继续说话")
+        val finalText = cleanText(tok.decode(generatedText))
+        if (finalText.isNotBlank()) {
+            val completed = ConversationTurn(
+                projected.copyOf(frontend.frameCount * 768),
+                frontend.frameCount,
+                finalText,
+            )
+            synchronized(history) {
+                history += completed
+                while (history.size > HISTORY_TURNS) history.removeFirst()
+            }
+        }
+        onStatus(
+            if (!emittedAudio) "请继续说话（本轮无语音，有效帧 ${playableFrames.size}）"
+            else "请继续说话（上一轮语音 ${playableFrames.size} 帧）"
+        )
     }
 
     private data class MainOutputs(
@@ -269,11 +409,18 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         topK: Int,
         topP: Float,
         temperature: Float,
+        recentTokens: List<Int> = emptyList(),
+        repetitionPenalty: Float = 1f,
     ): Int {
         data class Entry(val score: Float, val id: Int)
+        val recent = recentTokens.toHashSet()
         val heap = PriorityQueue<Entry>(compareBy { it.score })
         for (id in logits.indices) {
-            val entry = Entry(logits[id] / temperature, id)
+            var score = logits[id] / temperature
+            if (repetitionPenalty != 1f && id in recent) {
+                score = if (score > 0f) score / repetitionPenalty else score * repetitionPenalty
+            }
+            val entry = Entry(score, id)
             if (heap.size < topK) heap += entry
             else if (entry.score > heap.peek().score) {
                 heap.poll()
@@ -309,6 +456,41 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         .replace("<|im_end|>", "")
         .trim()
 
+    @Synchronized
+    fun clearHistory() {
+        history.clear()
+    }
+
+    private fun voiceFile(): File = File(MiniMindOModelStore.directory(context), "voice-clone.bin")
+
+    private fun saveVoice(codes: LongArray, frames: Int) {
+        DataOutputStream(voiceFile().outputStream().buffered()).use { output ->
+            output.writeInt(VOICE_MAGIC)
+            output.writeInt(frames)
+            for (code in codes) output.writeShort(code.toInt())
+        }
+    }
+
+    private fun loadSavedVoice() {
+        val file = voiceFile()
+        if (!file.isFile) return
+        try {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                check(input.readInt() == VOICE_MAGIC)
+                val frames = input.readInt()
+                check(frames in 1..128)
+                val codes = LongArray(8 * frames) { input.readUnsignedShort().toLong() }
+                check(codes.all { it in 0 until 2048 })
+                voiceCodes = codes
+                voiceFrames = frames
+            }
+        } catch (_: Throwable) {
+            file.delete()
+            voiceCodes = null
+            voiceFrames = 0
+        }
+    }
+
     override fun close() {
         main?.close()
         senseVoice?.close()
@@ -317,6 +499,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         senseVoice = null
         mimi = null
         tokenizer = null
+        clearHistory()
         System.gc()
     }
 }

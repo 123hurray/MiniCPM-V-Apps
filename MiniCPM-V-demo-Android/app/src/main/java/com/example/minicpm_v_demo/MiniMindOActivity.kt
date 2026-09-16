@@ -38,21 +38,28 @@ class MiniMindOActivity : AppCompatActivity() {
     private lateinit var progress: LinearProgressIndicator
     private lateinit var downloadButton: MaterialButton
     private lateinit var conversationButton: MaterialButton
+    private lateinit var voiceButton: MaterialButton
 
     private var engine: MiniMindOEngine? = null
     private var recorder: AudioRecord? = null
     private var recordThread: Thread? = null
     @Volatile private var sessionActive = false
     @Volatile private var generating = false
+    @Volatile private var suppressVadUntilNanos = 0L
     private var generationJob: Job? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var audioTrack: AudioTrack? = null
     private var assistantPrefixLength = 0
+    private enum class MicAction { CONVERSATION, VOICE_CLONE }
+    private var pendingMicAction = MicAction.CONVERSATION
 
     private val micPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startConversation()
+        if (granted) {
+            if (pendingMicAction == MicAction.VOICE_CLONE) recordVoiceClone()
+            else startConversation()
+        }
         else Toast.makeText(this, R.string.minimind_o_permission, Toast.LENGTH_LONG).show()
     }
 
@@ -66,12 +73,18 @@ class MiniMindOActivity : AppCompatActivity() {
         progress = findViewById(R.id.progress_model)
         downloadButton = findViewById(R.id.btn_download_model)
         conversationButton = findViewById(R.id.btn_conversation)
+        voiceButton = findViewById(R.id.btn_voice_clone)
 
         downloadButton.setOnClickListener {
             if (MiniMindOModelStore.isComplete(this)) confirmDeleteModel() else startDownload()
         }
         conversationButton.setOnClickListener {
             if (sessionActive) stopConversation() else ensureMicAndStart()
+        }
+        voiceButton.setOnClickListener { ensureMicAndClone() }
+        voiceButton.setOnLongClickListener {
+            if (MiniMindOModelStore.hasVoiceClone(this)) confirmDeleteVoice()
+            true
         }
         observeDownloads()
         refreshModelState()
@@ -87,6 +100,7 @@ class MiniMindOActivity : AppCompatActivity() {
                             status.text = state.message.ifBlank { getString(R.string.minimind_o_downloading) }
                             downloadButton.isEnabled = false
                             conversationButton.isEnabled = false
+                            voiceButton.isEnabled = false
                         }
                         ModelDownloadController.Status.Completed -> {
                             progress.visibility = View.GONE
@@ -96,6 +110,7 @@ class MiniMindOActivity : AppCompatActivity() {
                         is ModelDownloadController.Status.Failed -> {
                             progress.visibility = View.GONE
                             downloadButton.isEnabled = true
+                            voiceButton.isEnabled = MiniMindOModelStore.isComplete(this@MiniMindOActivity)
                             status.text = getString(R.string.minimind_o_error, state.message)
                             ModelDownloadController.acknowledge()
                         }
@@ -114,9 +129,14 @@ class MiniMindOActivity : AppCompatActivity() {
     private fun refreshModelState() {
         val complete = MiniMindOModelStore.isComplete(this)
         conversationButton.isEnabled = complete
+        voiceButton.isEnabled = complete && !sessionActive
         downloadButton.isEnabled = true
         downloadButton.setText(if (complete) R.string.minimind_o_delete else R.string.minimind_o_download)
         status.setText(if (complete) R.string.minimind_o_ready else R.string.minimind_o_checking)
+        voiceButton.setText(
+            if (MiniMindOModelStore.hasVoiceClone(this)) R.string.minimind_o_voice_rerecord
+            else R.string.minimind_o_voice_record
+        )
     }
 
     private fun startDownload() {
@@ -142,9 +162,93 @@ class MiniMindOActivity : AppCompatActivity() {
     }
 
     private fun ensureMicAndStart() {
+        pendingMicAction = MicAction.CONVERSATION
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         ) startConversation() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun ensureMicAndClone() {
+        if (sessionActive) return
+        pendingMicAction = MicAction.VOICE_CLONE
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) recordVoiceClone() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun recordVoiceClone() {
+        if (!MiniMindOModelStore.isComplete(this) || sessionActive) return
+        voiceButton.isEnabled = false
+        conversationButton.isEnabled = false
+        progress.visibility = View.VISIBLE
+        status.setText(R.string.minimind_o_voice_recording)
+        lifecycleScope.launch(Dispatchers.IO) {
+            var cloneRecorder: AudioRecord? = null
+            try {
+                val minBuffer = AudioRecord.getMinBufferSize(
+                    MiniMindOAudioFrontend.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                )
+                cloneRecorder = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MiniMindOAudioFrontend.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    max(minBuffer, 4096),
+                )
+                check(cloneRecorder.state == AudioRecord.STATE_INITIALIZED) {
+                    "参考语音录音初始化失败"
+                }
+                val reference = ShortArray(64_000)
+                var offset = 0
+                cloneRecorder.startRecording()
+                while (offset < reference.size) {
+                    val count = cloneRecorder.read(reference, offset, reference.size - offset)
+                    check(count > 0) { "参考语音录制失败：$count" }
+                    offset += count
+                }
+                cloneRecorder.stop()
+                // The encoder is used only while creating the voice. Release
+                // the conversation stack first so lower-memory phones never
+                // hold both large ExecuTorch programs at once.
+                engine?.close()
+                val activeEngine = MiniMindOEngine(applicationContext).also { engine = it }
+                val frames = activeEngine.createVoiceClone(reference) { message ->
+                    runOnUiThread { status.text = message }
+                }
+                withContext(Dispatchers.Main) {
+                    status.text = getString(R.string.minimind_o_voice_ready, frames)
+                    voiceButton.setText(R.string.minimind_o_voice_rerecord)
+                }
+            } catch (error: Throwable) {
+                withContext(Dispatchers.Main) {
+                    status.text = getString(R.string.minimind_o_error, error.message)
+                }
+            } finally {
+                try { cloneRecorder?.stop() } catch (_: Throwable) {}
+                cloneRecorder?.release()
+                withContext(Dispatchers.Main) {
+                    progress.visibility = View.GONE
+                    voiceButton.isEnabled = MiniMindOModelStore.isComplete(this@MiniMindOActivity)
+                    conversationButton.isEnabled = MiniMindOModelStore.isComplete(this@MiniMindOActivity)
+                }
+            }
+        }
+    }
+
+    private fun confirmDeleteVoice() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.minimind_o_voice_delete)
+            .setMessage(R.string.minimind_o_voice_delete_message)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                engine?.deleteVoiceClone()
+                MiniMindOModelStore.file(this, "voice-clone.bin").delete()
+                voiceButton.setText(R.string.minimind_o_voice_record)
+                status.setText(R.string.minimind_o_ready)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun startConversation() {
@@ -164,6 +268,7 @@ class MiniMindOActivity : AppCompatActivity() {
                     progress.visibility = View.GONE
                     conversationButton.isEnabled = true
                     conversationButton.setText(R.string.minimind_o_stop)
+                    voiceButton.isEnabled = false
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
                 beginRecordingLoop()
@@ -216,6 +321,18 @@ class MiniMindOActivity : AppCompatActivity() {
         while (sessionActive) {
             val read = activeRecorder.read(chunk, 0, chunk.size)
             if (read <= 0) continue
+            if (System.nanoTime() < suppressVadUntilNanos) {
+                // Do not treat our own loudspeaker output as a barge-in. Some
+                // devices expose an AcousticEchoCanceler but do not actually
+                // remove the far-end signal, which used to cancel and flush
+                // every response before it became audible.
+                speaking = false
+                speechSize = 0
+                voicedSamples = 0
+                silentSamples = 0
+                ringCount = 0
+                continue
+            }
             var energy = 0.0
             for (i in 0 until read) energy += chunk[i].toDouble() * chunk[i]
             val rms = sqrt(energy / read)
@@ -344,6 +461,11 @@ class MiniMindOActivity : AppCompatActivity() {
                 .toInt()
                 .toShort()
         }
+        val peak = pcm.maxOfOrNull { kotlin.math.abs(it.toInt()) } ?: 0
+        val durationNanos = pcm.size * 1_000_000_000L / 24_000L
+        val now = System.nanoTime()
+        suppressVadUntilNanos = maxOf(now, suppressVadUntilNanos) + durationNanos + 250_000_000L
+        runOnUiThread { status.text = "正在播放：${pcm.size} samples，峰值 $peak" }
         var written = 0
         while (written < pcm.size) {
             val count = track.write(pcm, written, pcm.size - written, AudioTrack.WRITE_BLOCKING)
@@ -373,6 +495,7 @@ class MiniMindOActivity : AppCompatActivity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::conversationButton.isInitialized) {
             conversationButton.setText(R.string.minimind_o_start)
+            voiceButton.isEnabled = MiniMindOModelStore.isComplete(this)
             status.setText(if (MiniMindOModelStore.isComplete(this)) R.string.minimind_o_ready else R.string.minimind_o_checking)
         }
     }

@@ -104,5 +104,9 @@ MiniCPM-V-demo-HarmonyOS/build-profile.json5
 # Local release artefacts (APK / HAP copies). Never commit binaries.
 dist/
 
+# Local Python exporter caches.
+__pycache__/
+*.py[cod]
+
 # Prebuilt llama.xcframework variants (numbered copies)
 MiniCPM-V-demo/thirdparty/*_llama.xcframework/

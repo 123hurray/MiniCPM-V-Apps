@@ -24,7 +24,7 @@ object MiniMindOModelStore {
 
     // These are Android-specific ExecuTorch exports derived from the
     // Apache-2.0 MiniMind-O checkpoints. They live in a release rather than
-    // the APK so an install/update never duplicates ~493 MiB of model data.
+    // the APK so an install/update never duplicates ~587 MiB of model data.
     val assets = listOf(
         Asset(
             "minimind-o-main-int8.pte",
@@ -42,6 +42,11 @@ object MiniMindOModelStore {
             "c1c51e4bd0fb0b87efa7087a08fa126aa08326527e0cb474bcb765b5ea58cdb1",
         ),
         Asset(
+            "minimind-o-mimi-encoder-int8.pte",
+            "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/minimind-o-mimi-encoder-int8.pte",
+            "9e6aa38b398d9b679513a451f0784ce9940632de29912257a300effb59754ef4",
+        ),
+        Asset(
             "tokenizer.json",
             "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/minimind-o-android-v1/tokenizer.json",
             "71f32c68cf63a15355a8fc171b7594b3d41870fe0ddb54fc6aefa55f73a4a668",
@@ -52,6 +57,9 @@ object MiniMindOModelStore {
         File(context.filesDir, "models/$MODEL_ID")
 
     fun file(context: Context, name: String): File = File(directory(context), name)
+
+    fun hasVoiceClone(context: Context): Boolean =
+        file(context, "voice-clone.bin").isFile
 
     fun isComplete(context: Context): Boolean = assets.all { asset ->
         val candidate = file(context, asset.fileName)
@@ -98,7 +106,7 @@ object MiniMindOModelStore {
             connectTimeout = 20_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MiniCPM-V-Android/3.1")
+            setRequestProperty("User-Agent", "MiniCPM-V-Android/3.3")
             if (resume > 0L) setRequestProperty("Range", "bytes=$resume-")
         }
         try {
