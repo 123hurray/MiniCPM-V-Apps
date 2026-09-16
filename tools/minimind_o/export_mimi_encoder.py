@@ -16,7 +16,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from export_mimi import MimiTransformer, make_convolutions_export_safe
+from export_mimi import ExportConv1d, MimiTransformer, make_convolutions_export_safe
 
 
 REFERENCE_SAMPLES = 96_000
@@ -67,7 +67,10 @@ class MimiEncoder(nn.Module):
             float(model.config.rope_theta),
             MAX_ENCODER_FRAMES,
         )
-        self.downsample = model.downsample
+        # This is itself a MimiConv1d (rather than a container), so the
+        # recursive helper cannot replace its root module. Wrap it explicitly
+        # to keep padding arithmetic shape-based and exportable.
+        self.downsample = ExportConv1d(model.downsample)
         quantizer = model.quantizer
         self.semantic = ResidualCodebooks(
             quantizer.semantic_residual_vector_quantizer, 1
@@ -76,7 +79,6 @@ class MimiEncoder(nn.Module):
             quantizer.acoustic_residual_vector_quantizer, 7
         )
         make_convolutions_export_safe(self.encoder)
-        make_convolutions_export_safe(self.downsample)
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
         hidden = self.encoder(waveform)
