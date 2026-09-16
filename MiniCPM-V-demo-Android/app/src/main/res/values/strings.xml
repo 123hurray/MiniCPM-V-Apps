@@ -204,7 +204,7 @@
     <string name="tts_play_ref">试听</string>
     <string name="tts_clear_ref">清除</string>
     <string name="tts_recording">正在录制…</string>
-    <string name="tts_ref_recorded">已录制 %.1f秒, %d KB</string>
+    <string name="tts_ref_recorded">已录制 %1$.1f秒, %2$d KB</string>
     <string name="tts_params_label">推理参数</string>
     <string name="tts_cfg_label">CFG 引导强度</string>
     <string name="tts_timesteps_label">推理步数</string>

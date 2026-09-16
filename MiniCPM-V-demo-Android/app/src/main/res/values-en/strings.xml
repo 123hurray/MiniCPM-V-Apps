@@ -191,7 +191,7 @@
     <string name="tts_play_ref">Play</string>
     <string name="tts_clear_ref">Clear</string>
     <string name="tts_recording">Recording…</string>
-    <string name="tts_ref_recorded">Recorded %.1fs, %d KB</string>
+    <string name="tts_ref_recorded">Recorded %1$.1fs, %2$d KB</string>
     <string name="tts_params_label">Inference Parameters</string>
     <string name="tts_cfg_label">CFG Scale</string>
     <string name="tts_timesteps_label">Timesteps</string>

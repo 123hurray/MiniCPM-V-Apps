@@ -76,7 +76,7 @@ object CpuFeatures {
         val performance = if (highest > 0) {
             frequencies.indices.filter { frequencies[it] >= (highest * 70L / 100L) }
         } else {
-            (0 until coreCount).takeLast(minOf(4, coreCount))
+            (0 until coreCount).toList().takeLast(minOf(4, coreCount))
         }.ifEmpty { (0 until coreCount).toList() }
 
         val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
