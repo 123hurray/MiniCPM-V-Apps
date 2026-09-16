@@ -65,7 +65,13 @@ def make_convolutions_export_safe(module: nn.Module) -> None:
 
 
 class MimiAttention(nn.Module):
-    def __init__(self, source: nn.Module, head_dim: int, rope_theta: float) -> None:
+    def __init__(
+        self,
+        source: nn.Module,
+        head_dim: int,
+        rope_theta: float,
+        max_sequence: int = 12,
+    ) -> None:
         super().__init__()
         self.q_proj = source.q_proj
         self.k_proj = source.k_proj
@@ -76,7 +82,7 @@ class MimiAttention(nn.Module):
         inv = 1.0 / (
             rope_theta ** (torch.arange(0, head_dim, 2).float() / head_dim)
         )
-        positions = torch.arange(12).float()
+        positions = torch.arange(max_sequence).float()
         freqs = torch.outer(positions, inv)
         self.register_buffer("cos", torch.cat((freqs.cos(), freqs.cos()), -1))
         self.register_buffer("sin", torch.cat((freqs.sin(), freqs.sin()), -1))
@@ -102,7 +108,11 @@ class MimiAttention(nn.Module):
         query = query * cos + self.rotate_half(query) * sin
         key = key * cos + self.rotate_half(key) * sin
         scores = torch.matmul(query, key.transpose(-2, -1)) / self.head_dim**0.5
-        causal = torch.full((12, 12), -1.0e9, device=hidden.device).triu(1)
+        causal = torch.full(
+            (self.cos.shape[0], self.cos.shape[0]),
+            -1.0e9,
+            device=hidden.device,
+        ).triu(1)
         scores = scores + causal[:sequence, :sequence].unsqueeze(0).unsqueeze(0)
         attended = torch.matmul(torch.softmax(scores.float(), -1), value)
         attended = attended.transpose(1, 2).reshape(batch, sequence, -1)
@@ -110,11 +120,19 @@ class MimiAttention(nn.Module):
 
 
 class MimiTransformerLayer(nn.Module):
-    def __init__(self, source: nn.Module, head_dim: int, rope_theta: float) -> None:
+    def __init__(
+        self,
+        source: nn.Module,
+        head_dim: int,
+        rope_theta: float,
+        max_sequence: int = 12,
+    ) -> None:
         super().__init__()
         self.input_layernorm = source.input_layernorm
         self.post_attention_layernorm = source.post_attention_layernorm
-        self.attention = MimiAttention(source.self_attn, head_dim, rope_theta)
+        self.attention = MimiAttention(
+            source.self_attn, head_dim, rope_theta, max_sequence
+        )
         self.fc1 = source.mlp.fc1
         self.fc2 = source.mlp.fc2
         self.attention_scale = source.self_attn_layer_scale
@@ -130,10 +148,16 @@ class MimiTransformerLayer(nn.Module):
 
 
 class MimiTransformer(nn.Module):
-    def __init__(self, source: nn.Module, head_dim: int, rope_theta: float) -> None:
+    def __init__(
+        self,
+        source: nn.Module,
+        head_dim: int,
+        rope_theta: float,
+        max_sequence: int = 12,
+    ) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
-            MimiTransformerLayer(layer, head_dim, rope_theta)
+            MimiTransformerLayer(layer, head_dim, rope_theta, max_sequence)
             for layer in source.layers
         )
 

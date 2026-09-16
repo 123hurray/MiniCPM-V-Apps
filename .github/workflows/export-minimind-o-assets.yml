@@ -52,6 +52,9 @@ jobs:
           python tools/minimind_o/export_mimi.py \
             --model-dir model-cache/mimi \
             --output dist/minimind-o-mimi-int8.pte
+          python tools/minimind_o/export_mimi_encoder.py \
+            --model-dir model-cache/mimi \
+            --output dist/minimind-o-mimi-encoder-int8.pte
           python tools/minimind_o/export_sensevoice.py \
             --sensevoice-dir model-cache/SenseVoiceSmall \
             --main-model-dir model-cache/minimind-3o \
