@@ -239,4 +239,11 @@
     <string name="minimind_o_voice_ready">音色克隆已就绪（%1$d 帧）</string>
     <string name="minimind_o_voice_delete">删除克隆音色</string>
     <string name="minimind_o_voice_delete_message">只删除保存在本机的参考音色，不删除模型。</string>
+    <string name="minimind_o_play_input">播放模型实际听到的录音（长按清除）</string>
+    <string name="minimind_o_playing_input">正在播放模型输入…</string>
+    <string name="minimind_o_input_saved">（已保存 %1$.1f 秒模型输入）</string>
+    <string name="minimind_o_input_save_failed">（录音保存失败：%1$s）</string>
+    <string name="minimind_o_playing_saved">正在播放：%1$s</string>
+    <string name="minimind_o_delete_inputs">清除模型输入录音</string>
+    <string name="minimind_o_delete_inputs_message">删除本机保存的全部 MiniMind-O 输入 WAV 录音。</string>
 </resources>

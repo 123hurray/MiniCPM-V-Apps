@@ -76,18 +76,36 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         onStatus: (String) -> Unit = {},
     ): Int {
         check(pcm16k.size >= VOICE_SAMPLE_COUNT_16K) { "参考语音不足 4 秒" }
-        var energy = 0.0
+        var mean = 0.0
+        for (index in 0 until VOICE_SAMPLE_COUNT_16K) mean += pcm16k[index]
+        mean /= VOICE_SAMPLE_COUNT_16K
+        val frameSamples = 320
+        val frameRms = DoubleArray(VOICE_SAMPLE_COUNT_16K / frameSamples)
         var peak = 0
-        for (index in 0 until VOICE_SAMPLE_COUNT_16K) {
-            val value = pcm16k[index].toInt()
-            energy += value.toDouble() * value
-            peak = maxOf(peak, kotlin.math.abs(value))
+        for (frame in frameRms.indices) {
+            var energy = 0.0
+            for (offset in 0 until frameSamples) {
+                val value = pcm16k[frame * frameSamples + offset] - mean
+                energy += value * value
+                peak = maxOf(peak, kotlin.math.abs(value.toInt()))
+            }
+            frameRms[frame] = sqrt(energy / frameSamples)
         }
-        val rms = sqrt(energy / VOICE_SAMPLE_COUNT_16K)
-        check(rms >= 260.0) { "参考语音太轻，请靠近麦克风重录" }
-        check(peak < 32_600) { "参考语音有爆音，请离麦克风稍远后重录" }
+        frameRms.sort()
+        // Whole-clip RMS rejects otherwise usable recordings containing a
+        // short pause. Use the upper-quartile 20 ms frame instead, then
+        // normalize quiet OEM microphone pipelines before Mimi encoding.
+        val voicedRms = frameRms[(frameRms.size * 3 / 4).coerceAtMost(frameRms.lastIndex)]
+        check(voicedRms >= 20.0 && peak >= 40) { "没有检测到有效参考语音，请重新朗读" }
+        val gain = (3_200.0 / voicedRms).coerceIn(0.35, 24.0)
+        val normalized = ShortArray(VOICE_SAMPLE_COUNT_16K) { index ->
+            ((pcm16k[index] - mean) * gain)
+                .toInt()
+                .coerceIn(-30_000, 30_000)
+                .toShort()
+        }
 
-        onStatus("正在提取克隆音色…")
+        onStatus("正在提取克隆音色（自动增益 ${"%.1f".format(gain)}×）…")
         val waveform = FloatArray(VOICE_SAMPLE_COUNT_24K)
         for (index in waveform.indices) {
             val source = index * 2f / 3f
@@ -95,7 +113,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             val right = (left + 1).coerceAtMost(VOICE_SAMPLE_COUNT_16K - 1)
             val fraction = source - left
             waveform[index] = (
-                pcm16k[left] * (1f - fraction) + pcm16k[right] * fraction
+                normalized[left] * (1f - fraction) + normalized[right] * fraction
             ) / 32768f
         }
         val encoder = Module.load(

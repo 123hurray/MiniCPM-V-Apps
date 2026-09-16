@@ -20,8 +20,8 @@ android {
         // This sets Android 8.0 (Oreo) as the minimum supported release.
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "3.4"
+        versionCode = 27
+        versionName = "3.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -106,7 +106,7 @@ object MiniMindOModelStore {
             connectTimeout = 20_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MiniCPM-V-Android/3.4")
+            setRequestProperty("User-Agent", "MiniCPM-V-Android/3.5")
             if (resume > 0L) setRequestProperty("Range", "bytes=$resume-")
         }
         try {

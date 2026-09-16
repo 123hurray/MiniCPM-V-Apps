@@ -6,8 +6,11 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -28,6 +31,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -39,16 +46,19 @@ class MiniMindOActivity : AppCompatActivity() {
     private lateinit var downloadButton: MaterialButton
     private lateinit var conversationButton: MaterialButton
     private lateinit var voiceButton: MaterialButton
+    private lateinit var playInputButton: MaterialButton
 
     private var engine: MiniMindOEngine? = null
     private var recorder: AudioRecord? = null
     private var recordThread: Thread? = null
     @Volatile private var sessionActive = false
     @Volatile private var generating = false
-    @Volatile private var suppressVadUntilNanos = 0L
+    @Volatile private var playbackExpectedUntilNanos = 0L
     private var generationJob: Job? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var audioTrack: AudioTrack? = null
+    private var inputPlayer: MediaPlayer? = null
+    private var lastInputFile: File? = null
     private var assistantPrefixLength = 0
     private enum class MicAction { CONVERSATION, VOICE_CLONE }
     private var pendingMicAction = MicAction.CONVERSATION
@@ -74,6 +84,7 @@ class MiniMindOActivity : AppCompatActivity() {
         downloadButton = findViewById(R.id.btn_download_model)
         conversationButton = findViewById(R.id.btn_conversation)
         voiceButton = findViewById(R.id.btn_voice_clone)
+        playInputButton = findViewById(R.id.btn_play_last_input)
 
         downloadButton.setOnClickListener {
             if (MiniMindOModelStore.isComplete(this)) confirmDeleteModel() else startDownload()
@@ -86,6 +97,12 @@ class MiniMindOActivity : AppCompatActivity() {
             if (MiniMindOModelStore.hasVoiceClone(this)) confirmDeleteVoice()
             true
         }
+        playInputButton.setOnClickListener { playLastModelInput() }
+        playInputButton.setOnLongClickListener {
+            confirmDeleteInputRecordings()
+            true
+        }
+        restoreLastInputRecording()
         observeDownloads()
         refreshModelState()
     }
@@ -130,6 +147,7 @@ class MiniMindOActivity : AppCompatActivity() {
         val complete = MiniMindOModelStore.isComplete(this)
         conversationButton.isEnabled = complete
         voiceButton.isEnabled = complete && !sessionActive
+        playInputButton.isEnabled = !sessionActive && lastInputFile?.isFile == true
         downloadButton.isEnabled = true
         downloadButton.setText(if (complete) R.string.minimind_o_delete else R.string.minimind_o_download)
         status.setText(if (complete) R.string.minimind_o_ready else R.string.minimind_o_checking)
@@ -184,6 +202,8 @@ class MiniMindOActivity : AppCompatActivity() {
         status.setText(R.string.minimind_o_voice_recording)
         lifecycleScope.launch(Dispatchers.IO) {
             var cloneRecorder: AudioRecord? = null
+            var cloneGain: AutomaticGainControl? = null
+            var cloneNoiseSuppressor: NoiseSuppressor? = null
             try {
                 val minBuffer = AudioRecord.getMinBufferSize(
                     MiniMindOAudioFrontend.SAMPLE_RATE,
@@ -191,7 +211,7 @@ class MiniMindOActivity : AppCompatActivity() {
                     AudioFormat.ENCODING_PCM_16BIT,
                 )
                 cloneRecorder = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MediaRecorder.AudioSource.MIC,
                     MiniMindOAudioFrontend.SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -199,6 +219,16 @@ class MiniMindOActivity : AppCompatActivity() {
                 )
                 check(cloneRecorder.state == AudioRecord.STATE_INITIALIZED) {
                     "参考语音录音初始化失败"
+                }
+                if (AutomaticGainControl.isAvailable()) {
+                    cloneGain = AutomaticGainControl.create(cloneRecorder.audioSessionId)?.apply {
+                        enabled = true
+                    }
+                }
+                if (NoiseSuppressor.isAvailable()) {
+                    cloneNoiseSuppressor = NoiseSuppressor.create(cloneRecorder.audioSessionId)?.apply {
+                        enabled = true
+                    }
                 }
                 val reference = ShortArray(64_000)
                 var offset = 0
@@ -227,6 +257,8 @@ class MiniMindOActivity : AppCompatActivity() {
                 }
             } finally {
                 try { cloneRecorder?.stop() } catch (_: Throwable) {}
+                cloneGain?.release()
+                cloneNoiseSuppressor?.release()
                 cloneRecorder?.release()
                 withContext(Dispatchers.Main) {
                     progress.visibility = View.GONE
@@ -269,6 +301,7 @@ class MiniMindOActivity : AppCompatActivity() {
                     conversationButton.isEnabled = true
                     conversationButton.setText(R.string.minimind_o_stop)
                     voiceButton.isEnabled = false
+                    playInputButton.isEnabled = false
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
                 beginRecordingLoop()
@@ -308,7 +341,9 @@ class MiniMindOActivity : AppCompatActivity() {
 
     private fun recordingLoop(activeRecorder: AudioRecord) {
         val chunk = ShortArray(1024)
-        val ring = ShortArray(4800)
+        // Keep one second of pre-roll so slow OEM VAD/AGC pipelines do not
+        // cut the first words from the exact waveform sent to the model.
+        val ring = ShortArray(MiniMindOAudioFrontend.SAMPLE_RATE)
         var ringPosition = 0
         var ringCount = 0
         val speech = ShortArray(16 * MiniMindOAudioFrontend.SAMPLE_RATE)
@@ -321,38 +356,41 @@ class MiniMindOActivity : AppCompatActivity() {
         while (sessionActive) {
             val read = activeRecorder.read(chunk, 0, chunk.size)
             if (read <= 0) continue
-            if (System.nanoTime() < suppressVadUntilNanos) {
-                // Do not treat our own loudspeaker output as a barge-in. Some
-                // devices expose an AcousticEchoCanceler but do not actually
-                // remove the far-end signal, which used to cancel and flush
-                // every response before it became audible.
-                speaking = false
-                speechSize = 0
-                voicedSamples = 0
-                silentSamples = 0
-                ringCount = 0
-                continue
-            }
+            val now = System.nanoTime()
+            val duringPlayback = now < playbackExpectedUntilNanos
             var energy = 0.0
             for (i in 0 until read) energy += chunk[i].toDouble() * chunk[i]
             val rms = sqrt(energy / read)
-            val voiced = rms > max(550.0, noiseFloor * 2.8)
-            if (!speaking && !voiced) noiseFloor = noiseFloor * 0.98 + rms * 0.02
+            val threshold = if (duringPlayback) {
+                // AEC remains enabled, but require a stronger sustained
+                // near-end voice while the loudspeaker is active to reject
+                // residual echo without disabling barge-in altogether.
+                max(1_100.0, noiseFloor * 4.0)
+            } else {
+                max(420.0, noiseFloor * 2.2)
+            }
+            val voiced = rms > threshold
+            if (!duringPlayback && !speaking && !voiced) {
+                noiseFloor = noiseFloor * 0.98 + rms * 0.02
+            }
+            if (duringPlayback && !speaking && !voiced) ringCount = 0
 
             if (voiced) {
                 voicedSamples += read
                 silentSamples = 0
-                if (!speaking && voicedSamples >= 2048) {
+                val required = if (duringPlayback) 3072 else 1024
+                if (!speaking && voicedSamples >= required) {
                     speaking = true
                     val start = (ringPosition - ringCount + ring.size) % ring.size
                     for (i in 0 until ringCount) {
                         if (speechSize < speech.size) speech[speechSize++] = ring[(start + i) % ring.size]
                     }
-                    if (generating) {
+                    if (generating || duringPlayback) {
                         generationJob?.cancel()
                         audioTrack?.pause()
                         audioTrack?.flush()
                         audioTrack?.play()
+                        playbackExpectedUntilNanos = 0L
                         generating = false
                     }
                     runOnUiThread { status.setText(R.string.minimind_o_speaking) }
@@ -376,6 +414,8 @@ class MiniMindOActivity : AppCompatActivity() {
                     voicedSamples = 0
                     silentSamples = 0
                     speechSize = 0
+                    ringPosition = 0
+                    ringCount = 0
                     submitTurn(turn)
                 }
             } else {
@@ -391,8 +431,15 @@ class MiniMindOActivity : AppCompatActivity() {
     private fun submitTurn(pcm: ShortArray) {
         generationJob?.cancel()
         generating = true
+        val captured = runCatching { saveModelInput(pcm) }
+        lastInputFile = captured.getOrNull()
         runOnUiThread {
-            transcript.append("\n\n${getString(R.string.minimind_o_user_turn)}\n")
+            val captureStatus = if (captured.isSuccess) {
+                getString(R.string.minimind_o_input_saved, pcm.size / 16_000f)
+            } else {
+                getString(R.string.minimind_o_input_save_failed, captured.exceptionOrNull()?.message ?: "I/O")
+            }
+            transcript.append("\n\n${getString(R.string.minimind_o_user_turn)} $captureStatus\n")
             transcript.append(getString(R.string.minimind_o_assistant))
             assistantPrefixLength = transcript.length()
             scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -464,11 +511,17 @@ class MiniMindOActivity : AppCompatActivity() {
         val peak = pcm.maxOfOrNull { kotlin.math.abs(it.toInt()) } ?: 0
         val durationNanos = pcm.size * 1_000_000_000L / 24_000L
         val now = System.nanoTime()
-        suppressVadUntilNanos = maxOf(now, suppressVadUntilNanos) + durationNanos + 250_000_000L
+        playbackExpectedUntilNanos = maxOf(now, playbackExpectedUntilNanos) +
+            durationNanos + 100_000_000L
         runOnUiThread { status.text = "正在播放：${pcm.size} samples，峰值 $peak" }
         var written = 0
         while (written < pcm.size) {
-            val count = track.write(pcm, written, pcm.size - written, AudioTrack.WRITE_BLOCKING)
+            if (!generating || playbackExpectedUntilNanos == 0L) return
+            // Small writes bound the time needed for a VAD thread to pause,
+            // flush and cancel playback after a real barge-in.
+            val requested = minOf(2048, pcm.size - written)
+            val count = track.write(pcm, written, requested, AudioTrack.WRITE_BLOCKING)
+            if (count <= 0 && !generating) return
             check(count > 0) { "AudioTrack 写入失败：$count" }
             written += count
         }
@@ -491,19 +544,106 @@ class MiniMindOActivity : AppCompatActivity() {
             it.release()
         }
         audioTrack = null
+        playbackExpectedUntilNanos = 0L
         generating = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (::conversationButton.isInitialized) {
             conversationButton.setText(R.string.minimind_o_start)
             voiceButton.isEnabled = MiniMindOModelStore.isComplete(this)
+            playInputButton.isEnabled = lastInputFile?.isFile == true
             status.setText(if (MiniMindOModelStore.isComplete(this)) R.string.minimind_o_ready else R.string.minimind_o_checking)
         }
     }
 
     override fun onDestroy() {
         stopConversation()
+        inputPlayer?.release()
+        inputPlayer = null
         engine?.close()
         engine = null
         super.onDestroy()
+    }
+
+    private fun recordingsDirectory(): File {
+        val root = getExternalFilesDir(null) ?: filesDir
+        return File(root, "minimind-o/recordings").apply { mkdirs() }
+    }
+
+    private fun restoreLastInputRecording() {
+        lastInputFile = recordingsDirectory().listFiles { file ->
+            file.isFile && file.extension.equals("wav", ignoreCase = true)
+        }?.maxByOrNull { it.lastModified() }
+        playInputButton.isEnabled = lastInputFile?.isFile == true
+    }
+
+    private fun saveModelInput(pcm: ShortArray): File {
+        val directory = recordingsDirectory()
+        val target = File(directory, "model-input-${System.currentTimeMillis()}.wav")
+        FileOutputStream(target).use { output ->
+            val dataBytes = pcm.size * 2
+            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+                put("RIFF".toByteArray(Charsets.US_ASCII))
+                putInt(36 + dataBytes)
+                put("WAVEfmt ".toByteArray(Charsets.US_ASCII))
+                putInt(16)
+                putShort(1.toShort())
+                putShort(1.toShort())
+                putInt(MiniMindOAudioFrontend.SAMPLE_RATE)
+                putInt(MiniMindOAudioFrontend.SAMPLE_RATE * 2)
+                putShort(2.toShort())
+                putShort(16.toShort())
+                put("data".toByteArray(Charsets.US_ASCII))
+                putInt(dataBytes)
+            }.array()
+            output.write(header)
+            val bytes = ByteBuffer.allocate(pcm.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            for (sample in pcm) bytes.putShort(sample)
+            output.write(bytes.array())
+        }
+        directory.listFiles { file -> file.isFile && file.extension == "wav" }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(20)
+            ?.forEach { it.delete() }
+        return target
+    }
+
+    private fun playLastModelInput() {
+        val file = lastInputFile?.takeIf { it.isFile } ?: return
+        inputPlayer?.release()
+        inputPlayer = MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            setDataSource(file.absolutePath)
+            setOnCompletionListener {
+                it.release()
+                if (inputPlayer === it) inputPlayer = null
+                playInputButton.setText(R.string.minimind_o_play_input)
+            }
+            prepare()
+            start()
+        }
+        playInputButton.setText(R.string.minimind_o_playing_input)
+        status.text = getString(R.string.minimind_o_playing_saved, file.name)
+    }
+
+    private fun confirmDeleteInputRecordings() {
+        if (lastInputFile == null) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.minimind_o_delete_inputs)
+            .setMessage(R.string.minimind_o_delete_inputs_message)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                inputPlayer?.release()
+                inputPlayer = null
+                recordingsDirectory().listFiles()?.forEach { it.delete() }
+                lastInputFile = null
+                playInputButton.isEnabled = false
+                playInputButton.setText(R.string.minimind_o_play_input)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 }
