@@ -177,6 +177,16 @@
     <string name="agent_max_output">单轮最大输出 (token)</string>
     <string name="agent_max_output_hint">限制每一轮 LLM 文本的最大生成长度，下一次 Agent 请求生效。</string>
     <string name="agent_settings_saved">Agent 设置已保存：%1$d / %2$d</string>
+    <string name="performance_settings">推理性能</string>
+    <string name="performance_settings_description">后端、线程、温控与诊断</string>
+    <string name="performance_backend_auto">自动（加速器失败时回退 CPU）</string>
+    <string name="performance_backend_cpu">仅 CPU（最稳定）</string>
+    <string name="performance_backend_gpu">GPU / Vulkan（实验）</string>
+    <string name="performance_backend_hexagon">Hexagon NPU（需支持库）</string>
+    <string name="performance_diagnostics">性能诊断</string>
+    <string name="performance_restart_hint">设置已保存，将在重新加载模型后生效</string>
+    <string name="performance_diagnostics_copied">诊断信息已复制</string>
+    <string name="copy">复制</string>
 
     <!-- TTS Activity -->
     <string name="tts_title">语音合成 (VoxCPM2)</string>
@@ -239,4 +249,9 @@
     <string name="minimind_o_voice_ready">音色克隆已就绪（%1$d 帧）</string>
     <string name="minimind_o_voice_delete">删除克隆音色</string>
     <string name="minimind_o_voice_delete_message">只删除保存在本机的参考音色，不删除模型。</string>
+    <string name="minimind_o_play_input">回放最近一次模型输入（长按清空）</string>
+    <string name="minimind_o_playing_input">正在回放模型输入…</string>
+    <string name="minimind_o_playing_saved">正在回放：%1$s</string>
+    <string name="minimind_o_delete_inputs">清空模型输入录音</string>
+    <string name="minimind_o_delete_inputs_message">删除本机保存的 MiniMind-O 模型输入 WAV，模型和克隆音色不受影响。</string>
 </resources>

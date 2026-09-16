@@ -164,6 +164,16 @@
     <string name="agent_max_output">Maximum output per turn (tokens)</string>
     <string name="agent_max_output_hint">Limits each LLM text generation. Takes effect on the next Agent request.</string>
     <string name="agent_settings_saved">Agent settings saved: %1$d / %2$d</string>
+    <string name="performance_settings">Inference Performance</string>
+    <string name="performance_settings_description">Backend, threads, thermals and diagnostics</string>
+    <string name="performance_backend_auto">Auto (fall back to CPU on failure)</string>
+    <string name="performance_backend_cpu">CPU only (most stable)</string>
+    <string name="performance_backend_gpu">GPU / Vulkan (experimental)</string>
+    <string name="performance_backend_hexagon">Hexagon NPU (support library required)</string>
+    <string name="performance_diagnostics">Performance diagnostics</string>
+    <string name="performance_restart_hint">Saved; reload the model to apply</string>
+    <string name="performance_diagnostics_copied">Diagnostics copied</string>
+    <string name="copy">Copy</string>
 
     <!-- TTS Activity -->
     <string name="tts_title">TTS (VoxCPM2)</string>
@@ -220,4 +230,9 @@
     <string name="minimind_o_permission">Microphone permission is required for live conversation</string>
     <string name="minimind_o_error">MiniMind-O error: %1$s</string>
     <string name="minimind_o_entry">Live voice conversation</string>
+    <string name="minimind_o_play_input">Play latest model input (hold to clear)</string>
+    <string name="minimind_o_playing_input">Playing model input…</string>
+    <string name="minimind_o_playing_saved">Playing: %1$s</string>
+    <string name="minimind_o_delete_inputs">Clear model-input recordings</string>
+    <string name="minimind_o_delete_inputs_message">Delete saved MiniMind-O input WAV files. The model and cloned voice are not affected.</string>
 </resources>

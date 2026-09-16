@@ -29,8 +29,13 @@ jobs:
           cache: gradle
           cache-dependency-path: MiniCPM-V-demo-Android/*.gradle.kts
 
+      - name: Apply Android runtime overlay to llama.cpp-omni
+        run: git -C llama.cpp-omni apply ../MiniCPM-V-demo-Android/patches/llama.cpp-omni-snapdragon.patch
+
       - name: Install Android build components
         run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc libvulkan-dev
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" \
@@ -48,25 +53,25 @@ jobs:
       - name: Prepare signing inputs
         run: |
           cp MiniCPM-V-demo-Android/app/build/outputs/apk/release/app-release-unsigned.apk \
-            MiniCPM-V-demo-Android-v3.4-unsigned.apk
+            MiniCPM-V-demo-Android-v3.6-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
 
       - name: Verify APK metadata
         run: |
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
-          "$AAPT" dump badging MiniCPM-V-demo-Android-v3.4-unsigned.apk | tee /tmp/apk-badging.txt
-          grep -F "package: name='com.example.minicpm_v_demo' versionCode='26' versionName='3.4'" \
+          "$AAPT" dump badging MiniCPM-V-demo-Android-v3.6-unsigned.apk | tee /tmp/apk-badging.txt
+          grep -F "package: name='com.example.minicpm_v_demo' versionCode='28' versionName='3.6'" \
             /tmp/apk-badging.txt
-          unzip -t MiniCPM-V-demo-Android-v3.4-unsigned.apk
-          sha256sum MiniCPM-V-demo-Android-v3.4-unsigned.apk > SHA256SUMS
-          tar -czf MiniCPM-V-demo-Android-v3.4-signing-inputs.tar.gz \
-            MiniCPM-V-demo-Android-v3.4-unsigned.apk apksigner.jar SHA256SUMS
+          unzip -t MiniCPM-V-demo-Android-v3.6-unsigned.apk
+          sha256sum MiniCPM-V-demo-Android-v3.6-unsigned.apk > SHA256SUMS
+          tar -czf MiniCPM-V-demo-Android-v3.6-signing-inputs.tar.gz \
+            MiniCPM-V-demo-Android-v3.6-unsigned.apk apksigner.jar SHA256SUMS
 
       - name: Upload unsigned APK and signer
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCPM-V-demo-Android-v3.4-signing-inputs
+          name: MiniCPM-V-demo-Android-v3.6-signing-inputs
           path: |
-            MiniCPM-V-demo-Android-v3.4-signing-inputs.tar.gz
+            MiniCPM-V-demo-Android-v3.6-signing-inputs.tar.gz
           if-no-files-found: error
           retention-days: 30

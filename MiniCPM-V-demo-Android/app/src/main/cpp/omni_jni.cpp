@@ -8,17 +8,64 @@
 
 #include <jni.h>
 #include <android/log.h>
+#include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
 #include "voxcpm2_runtime.h"
 #include "llama.h"
+#include "runtime_config.h"
 
 #define TAG "omni_jni"
 #define LOG_I(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOG_E(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 static VoxCPM2Runtime * g_runtime = nullptr;
+static std::string g_base_lm_path;
+static std::string g_acoustic_path;
+static std::string g_native_lib_dir;
+static bool g_accelerator_active = false;
+static bool g_fell_back_to_cpu = false;
+static double g_last_generation_ms = 0.0;
+
+static std::string preferred_device_for_mode(RuntimeBackendMode mode) {
+    switch (mode) {
+        case RuntimeBackendMode::Gpu: return "Vulkan0";
+        case RuntimeBackendMode::Hexagon: return "HTP0";
+        case RuntimeBackendMode::Auto:
+        case RuntimeBackendMode::Cpu:
+            return {};
+    }
+    return {};
+}
+
+static bool initRuntime(bool forceCpu) {
+    if (!g_native_lib_dir.empty()) {
+        ggml_backend_load_all_from_path(g_native_lib_dir.c_str());
+    } else {
+        ggml_backend_load_all();
+    }
+    runtime_apply_thread_policy();
+
+    const RuntimeBackendMode mode = forceCpu ? RuntimeBackendMode::Cpu : runtime_backend_mode();
+    const bool useAccelerator = mode != RuntimeBackendMode::Cpu;
+    const int gpuLayers = useAccelerator ? -1 : 0;
+    const std::string preferred = preferred_device_for_mode(mode);
+
+    auto * rt = new VoxCPM2Runtime();
+    if (!rt->init(g_base_lm_path, g_acoustic_path, gpuLayers, useAccelerator,
+                  runtime_thread_count(), 4096, preferred)) {
+        LOG_E("initRuntime: %s init failed: %s",
+              useAccelerator ? "accelerator" : "CPU", rt->last_error().c_str());
+        delete rt;
+        return false;
+    }
+    g_runtime = rt;
+    g_accelerator_active = useAccelerator && rt->backend_name().find("CPU") == std::string::npos;
+    LOG_I("initRuntime: backend=%s threads=%d", rt->backend_name().c_str(), runtime_thread_count());
+    return true;
+}
 
 static std::string jstringToStdString(JNIEnv * env, jstring jStr) {
     if (!jStr) return {};
@@ -120,12 +167,14 @@ extern "C" {
 JNIEXPORT jboolean JNICALL
 Java_com_example_minicpm_1v_1demo_TtsEngine_nativeInitOmni(
     JNIEnv * env, jclass /* cls */,
-    jstring baseLmPath, jstring acousticPath) {
+    jstring baseLmPath, jstring acousticPath, jstring nativeLibDir) {
 
-    auto baseLm = jstringToStdString(env, baseLmPath);
-    auto acoustic = jstringToStdString(env, acousticPath);
+    g_base_lm_path = jstringToStdString(env, baseLmPath);
+    g_acoustic_path = jstringToStdString(env, acousticPath);
+    g_native_lib_dir = jstringToStdString(env, nativeLibDir);
+    g_fell_back_to_cpu = false;
 
-    LOG_I("nativeInitOmni: baseLm=%s acoustic=%s", baseLm.c_str(), acoustic.c_str());
+    LOG_I("nativeInitOmni: baseLm=%s acoustic=%s", g_base_lm_path.c_str(), g_acoustic_path.c_str());
 
     if (g_runtime) {
         g_runtime->free();
@@ -133,14 +182,13 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeInitOmni(
         g_runtime = nullptr;
     }
 
-    auto * rt = new VoxCPM2Runtime();
-    if (!rt->init(baseLm, acoustic, /*n_gpu_layers=*/-1, /*use_gpu_backend=*/false)) {
-        LOG_E("nativeInitOmni: init failed: %s", rt->last_error().c_str());
-        delete rt;
-        return JNI_FALSE;
+    if (!initRuntime(false)) {
+        if (runtime_backend_mode() == RuntimeBackendMode::Cpu || !initRuntime(true)) {
+            return JNI_FALSE;
+        }
+        g_fell_back_to_cpu = true;
     }
 
-    g_runtime = rt;
     LOG_I("nativeInitOmni: success");
     return JNI_TRUE;
 }
@@ -166,10 +214,12 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     params.max_steps           = 200;
 
     std::vector<float> waveform;
+    std::vector<float> refPcm;
+    const auto started = std::chrono::steady_clock::now();
+    runtime_apply_thread_policy();
 
     if (!refPath.empty()) {
         // Voice cloning mode
-        std::vector<float> refPcm;
         if (!readWavF32(refPath, refPcm, nullptr)) {
             LOG_E("nativeTtsGenerate: failed to read reference WAV");
             return JNI_FALSE;
@@ -179,11 +229,28 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
         waveform = g_runtime->generate(txt, params);
     }
 
+    if (waveform.empty() && g_accelerator_active) {
+        LOG_E("nativeTtsGenerate: accelerator failed (%s); retrying once on CPU",
+              g_runtime->last_error().c_str());
+        g_runtime->free();
+        delete g_runtime;
+        g_runtime = nullptr;
+        if (initRuntime(true)) {
+            g_fell_back_to_cpu = true;
+            waveform = refPath.empty()
+                ? g_runtime->generate(txt, params)
+                : g_runtime->generate_with_clone(txt, refPcm, params);
+        }
+    }
+
     if (waveform.empty()) {
         LOG_E("nativeTtsGenerate: generation produced empty waveform: %s",
-              g_runtime->last_error().c_str());
+              g_runtime ? g_runtime->last_error().c_str() : "runtime unavailable");
         return JNI_FALSE;
     }
+
+    g_last_generation_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
 
     int sr = g_runtime->sample_rate();
     if (!writeWavI16(outPath, waveform, sr)) {
@@ -196,6 +263,16 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     return JNI_TRUE;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_example_minicpm_1v_1demo_TtsEngine_nativeOmniRuntimeInfo(
+    JNIEnv * env, jclass /* cls */) {
+    std::string info = "backend=" + (g_runtime ? g_runtime->backend_name() : std::string("none"));
+    info += ", accelerator=" + std::string(g_accelerator_active ? "true" : "false");
+    info += ", cpuFallback=" + std::string(g_fell_back_to_cpu ? "true" : "false");
+    info += ", generationMs=" + std::to_string(static_cast<long long>(g_last_generation_ms));
+    return env->NewStringUTF(info.c_str());
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_minicpm_1v_1demo_TtsEngine_nativeOmniFree(
     JNIEnv * /* env */, jclass /* cls */) {
@@ -206,6 +283,7 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeOmniFree(
         delete g_runtime;
         g_runtime = nullptr;
     }
+    g_accelerator_active = false;
 }
 
 } // extern "C"

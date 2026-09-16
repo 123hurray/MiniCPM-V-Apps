@@ -54,7 +54,8 @@ endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
         llama_jni.cpp
-        omni_jni.cpp)
+        omni_jni.cpp
+        runtime_config.cpp)
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}

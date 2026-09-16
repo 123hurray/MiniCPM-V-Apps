@@ -1,6 +1,7 @@
 package com.example.minicpm_v_demo
 
 import android.util.Log
+import android.os.Build
 import java.io.File
 
 object CpuFeatures {
@@ -13,6 +14,18 @@ object CpuFeatures {
     val hasSve2: Boolean get() = "sve2" in features
     val hasDotprod: Boolean get() = "asimddp" in features
     val hasFp16: Boolean get() = "fphp" in features
+
+    data class DeviceProfile(
+        val soc: String,
+        val coreCount: Int,
+        val maxFrequenciesKHz: List<Int>,
+        val performanceCpuIds: List<Int>,
+        val recommendedThreads: Int,
+    )
+
+    private val profile: DeviceProfile by lazy { readDeviceProfile() }
+
+    fun deviceProfile(): DeviceProfile = profile
 
     /**
      * Returns the best available ggml-cpu library name for the current CPU.
@@ -31,16 +44,59 @@ object CpuFeatures {
     }
 
     private fun readFeatures(): Set<String> = try {
-        File("/proc/cpuinfo").readLines()
+        val featureSets = File("/proc/cpuinfo").readLines()
             .filter { it.startsWith("Features") }
-            .firstOrNull()
-            ?.substringAfter(":")
-            ?.trim()
-            ?.split("\\s+".toRegex())
-            ?.toSet()
+            .map {
+                it.substringAfter(":").trim().split("\\s+".toRegex()).filter(String::isNotBlank).toSet()
+            }
+        // Instruction-specific binaries must only use features shared by all
+        // visible cores. This is safer than trusting the first core on a
+        // heterogeneous mobile SoC.
+        featureSets.reduceOrNull { common, next -> common intersect next }
             ?: emptySet<String>().also { Log.w(TAG, "No Features line in /proc/cpuinfo") }
     } catch (e: Exception) {
         Log.e(TAG, "Failed to read /proc/cpuinfo", e)
         emptySet()
     }
+
+    private fun readDeviceProfile(): DeviceProfile {
+        val coreCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val frequencies = (0 until coreCount).map { cpu ->
+            sequenceOf(
+                "/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq",
+                "/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_max_freq",
+            ).mapNotNull { path ->
+                runCatching {
+                    File(path).takeIf(File::canRead)?.readText()?.trim()?.toIntOrNull()
+                }.getOrNull()
+            }
+                .firstOrNull() ?: 0
+        }
+        val highest = frequencies.maxOrNull().orEmptyFrequency()
+        val performance = if (highest > 0) {
+            frequencies.indices.filter { frequencies[it] >= (highest * 70L / 100L) }
+        } else {
+            (0 until coreCount).takeLast(minOf(4, coreCount))
+        }.ifEmpty { (0 until coreCount).toList() }
+
+        val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Build.SOC_MODEL.takeUnless { it.isBlank() } ?: Build.HARDWARE
+        } else {
+            Build.HARDWARE
+        }
+        val isSnapdragon8Gen2 = listOf(soc, Build.HARDWARE, Build.BOARD)
+            .any { value ->
+                value.contains("SM8550", ignoreCase = true) ||
+                    value.contains("8 Gen 2", ignoreCase = true) ||
+                    value.contains("kalama", ignoreCase = true)
+            }
+        val threads = when {
+            isSnapdragon8Gen2 -> minOf(5, performance.size).coerceAtLeast(2)
+            performance.size >= 4 -> minOf(4, performance.size)
+            else -> minOf(4, coreCount)
+        }
+        return DeviceProfile(soc, coreCount, frequencies, performance, threads.coerceAtLeast(1))
+    }
+
+    private fun Int?.orEmptyFrequency(): Int = this ?: 0
 }

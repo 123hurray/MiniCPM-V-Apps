@@ -32,6 +32,11 @@ class TtsEngine private constructor(
         @Volatile
         private var instance: TtsEngine? = null
 
+        @Volatile
+        private var lastPerformance: String? = null
+
+        fun lastPerformanceSummary(): String? = lastPerformance
+
         fun getInstance(context: Context): TtsEngine =
             instance ?: synchronized(this) {
                 TtsEngine(context).also { instance = it }
@@ -52,12 +57,17 @@ class TtsEngine private constructor(
     var sampleRate: Int = 48000
         private set
 
-    private external fun nativeInitOmni(baseLmPath: String, acousticPath: String): Boolean
+    private external fun nativeInitOmni(
+        baseLmPath: String,
+        acousticPath: String,
+        nativeLibDir: String,
+    ): Boolean
     private external fun nativeTtsGenerate(
         text: String, cfgValue: Float, timesteps: Int,
         refWavPath: String, outputPath: String
     ): Boolean
     private external fun nativeOmniFree()
+    private external fun nativeOmniRuntimeInfo(): String
 
     init {
         ttsScope.launch {
@@ -65,7 +75,7 @@ class TtsEngine private constructor(
                 check(_state.value is TtsState.Uninitialized)
                 _state.value = TtsState.Initializing
                 Log.i(TAG, "Loading native library for TTS...")
-                System.loadLibrary("minicpm_v_demo") // omni_jni is compiled into the same shared lib
+                NativeRuntime.initialize(context)
                 Log.i(TAG, "TTS native library loaded")
                 // Don't auto-init; wait for loadModel to be called
             } catch (e: Exception) {
@@ -89,9 +99,10 @@ class TtsEngine private constructor(
         check(File(acousticPath).exists()) { "Acoustic GGUF not found: $acousticPath" }
 
         try {
+            NativeRuntime.prepareForInference(context)
             _state.value = TtsState.LoadingModel
             Log.i(TAG, "Initializing VoxCPM2 runtime: baseLm=$baseLmPath acoustic=$acousticPath")
-            val ok = nativeInitOmni(baseLmPath, acousticPath)
+            val ok = nativeInitOmni(baseLmPath, acousticPath, context.applicationInfo.nativeLibraryDir)
             if (!ok) {
                 val e = RuntimeException("VoxCPM2 runtime init failed")
                 _state.value = TtsState.Error(e)
@@ -121,8 +132,11 @@ class TtsEngine private constructor(
         check(_state.value is TtsState.Ready) { "Engine not ready: ${_state.value}" }
 
         try {
+            NativeRuntime.prepareForInference(context)
             _state.value = TtsState.Generating
             Log.i(TAG, "Generating speech: len=${text.length} cfg=$cfgValue steps=$timesteps refAudio=${referenceWavPath != null}")
+
+            val startedNs = System.nanoTime()
 
             val ok = nativeTtsGenerate(
                 text,
@@ -139,6 +153,10 @@ class TtsEngine private constructor(
             }
 
             Log.i(TAG, "Speech generated: $outputPath (${File(outputPath).length() / 1024} KB)")
+            val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000.0
+            val audioSeconds = ((File(outputPath).length() - 44L).coerceAtLeast(0L) / 2.0) / sampleRate
+            val rtf = if (audioSeconds > 0.0) elapsedMs / 1000.0 / audioSeconds else 0.0
+            lastPerformance = "${nativeOmniRuntimeInfo()}, audio=${"%.2f".format(audioSeconds)}s, RTF=${"%.2f".format(rtf)}"
             _state.value = TtsState.Ready
             return@withContext true
         } catch (e: Exception) {

@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NativeRuntime.enableSustainedPerformanceMode(this)
         createdWithLocale = LocaleManager.currentLanguage(this).tag
 
         // If the selected model is a TTS model, redirect to TtsActivity immediately.

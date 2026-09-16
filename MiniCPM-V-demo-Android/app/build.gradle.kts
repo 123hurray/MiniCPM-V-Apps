@@ -4,6 +4,19 @@ plugins {
     id("com.chaquo.python")
 }
 
+val enableVulkan = providers.gradleProperty("MINICPMV_ENABLE_VULKAN")
+    .map(String::toBoolean)
+    .orElse(true)
+val openClSdkRoot = providers.environmentVariable("OPENCL_SDK_ROOT")
+val enableOpenCl = providers.gradleProperty("MINICPMV_ENABLE_OPENCL")
+    .map(String::toBoolean)
+    .orElse(openClSdkRoot.isPresent)
+val hexagonSdkRoot = providers.environmentVariable("HEXAGON_SDK_ROOT")
+val hexagonToolsRoot = providers.environmentVariable("HEXAGON_TOOLS_ROOT")
+val enableHexagon = providers.gradleProperty("MINICPMV_ENABLE_HEXAGON")
+    .map(String::toBoolean)
+    .orElse(hexagonSdkRoot.isPresent && hexagonToolsRoot.isPresent)
+
 android {
     namespace = "com.example.minicpm_v_demo"
     compileSdk {
@@ -20,8 +33,8 @@ android {
         // This sets Android 8.0 (Oreo) as the minimum supported release.
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "3.4"
+        versionCode = 28
+        versionName = "3.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -39,7 +52,23 @@ android {
 
                 arguments += "-DGGML_NATIVE=OFF"
                 arguments += "-DGGML_LLAMAFILE=ON"
+                // Keep the fallback usable on every arm64 Android device.
+                // SM8550-class devices load the separately packaged v8.6
+                // implementation before this baseline SONAME resolves.
+                arguments += "-DGGML_CPU_ARM_ARCH=armv8-a"
+                arguments += "-DGGML_VULKAN=${if (enableVulkan.get()) "ON" else "OFF"}"
+                arguments += "-DGGML_OPENCL=${if (enableOpenCl.get()) "ON" else "OFF"}"
+                arguments += "-DGGML_HEXAGON=${if (enableHexagon.get()) "ON" else "OFF"}"
                 arguments += "-DLLAMA_CURL=OFF"
+                if (enableOpenCl.get()) {
+                    arguments += "-DCMAKE_PREFIX_PATH=${openClSdkRoot.get()}"
+                    arguments += "-DGGML_OPENCL_USE_ADRENO_KERNELS=ON"
+                }
+                if (enableHexagon.get()) {
+                    arguments += "-DHEXAGON_SDK_ROOT=${hexagonSdkRoot.get()}"
+                    arguments += "-DHEXAGON_TOOLS_ROOT=${hexagonToolsRoot.get()}"
+                    arguments += "-DPREBUILT_LIB_DIR=android_aarch64"
+                }
             }
         }
     }
@@ -92,6 +121,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     androidResources {

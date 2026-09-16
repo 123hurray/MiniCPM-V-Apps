@@ -50,6 +50,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
     fun load(onStatus: (String) -> Unit = {}) {
         check(MiniMindOModelStore.isComplete(context)) { "MiniMind-O 模型尚未下载完整" }
         if (main != null) return
+        NativeRuntime.prepareForInference(context)
         onStatus("加载 MiniMind-O 主干…")
         main = Module.load(
             MiniMindOModelStore.file(context, "minimind-o-main-int8.pte").absolutePath
@@ -76,18 +77,34 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         onStatus: (String) -> Unit = {},
     ): Int {
         check(pcm16k.size >= VOICE_SAMPLE_COUNT_16K) { "参考语音不足 4 秒" }
-        var energy = 0.0
-        var peak = 0
-        for (index in 0 until VOICE_SAMPLE_COUNT_16K) {
-            val value = pcm16k[index].toInt()
-            energy += value.toDouble() * value
-            peak = maxOf(peak, kotlin.math.abs(value))
+        NativeRuntime.prepareForInference(context)
+        // Phone microphone gain varies widely. Use a robust voiced-level
+        // estimate instead of rejecting an otherwise usable four-second
+        // recording based on its global RMS, then normalize before encoding.
+        val dc = pcm16k.take(VOICE_SAMPLE_COUNT_16K).sumOf { it.toDouble() } /
+            VOICE_SAMPLE_COUNT_16K
+        val blockRms = DoubleArray(200)
+        var centeredPeak = 0
+        for (block in blockRms.indices) {
+            var energy = 0.0
+            for (offset in 0 until 320) {
+                val centered = pcm16k[block * 320 + offset] - dc
+                energy += centered * centered
+                centeredPeak = maxOf(centeredPeak, kotlin.math.abs(centered.toInt()))
+            }
+            blockRms[block] = sqrt(energy / 320.0)
         }
-        val rms = sqrt(energy / VOICE_SAMPLE_COUNT_16K)
-        check(rms >= 260.0) { "参考语音太轻，请靠近麦克风重录" }
-        check(peak < 32_600) { "参考语音有爆音，请离麦克风稍远后重录" }
+        blockRms.sort()
+        val voicedLevel = blockRms[minOf(150, blockRms.lastIndex)]
+        check(voicedLevel >= 20.0 && centeredPeak >= 40) {
+            "参考语音太轻，请靠近麦克风重录"
+        }
+        val gain = (3200.0 / voicedLevel).coerceIn(0.35, 24.0)
+        val normalized = ShortArray(VOICE_SAMPLE_COUNT_16K) { index ->
+            ((pcm16k[index] - dc) * gain).toInt().coerceIn(-30_000, 30_000).toShort()
+        }
 
-        onStatus("正在提取克隆音色…")
+        onStatus("正在提取克隆音色（自动增益 ${"%.1f".format(gain)}×）…")
         val waveform = FloatArray(VOICE_SAMPLE_COUNT_24K)
         for (index in waveform.indices) {
             val source = index * 2f / 3f
@@ -95,7 +112,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             val right = (left + 1).coerceAtMost(VOICE_SAMPLE_COUNT_16K - 1)
             val fraction = source - left
             waveform[index] = (
-                pcm16k[left] * (1f - fraction) + pcm16k[right] * fraction
+                normalized[left] * (1f - fraction) + normalized[right] * fraction
             ) / 32768f
         }
         val encoder = Module.load(
@@ -138,6 +155,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         onAudio: (FloatArray, Int) -> Unit,
         onStatus: (String) -> Unit,
     ) {
+        NativeRuntime.prepareForInference(context)
         val mainModule = checkNotNull(main) { "模型未加载" }
         val senseModule = checkNotNull(senseVoice) { "SenseVoice 未加载" }
         val mimiModule = checkNotNull(mimi) { "Mimi 未加载" }

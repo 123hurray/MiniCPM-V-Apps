@@ -1,0 +1,140 @@
+diff --git a/tools/omni/voxcpm2/voxcpm2_llm.cpp b/tools/omni/voxcpm2/voxcpm2_llm.cpp
+index b2544e3..3d97ebe 100644
+--- a/tools/omni/voxcpm2/voxcpm2_llm.cpp
++++ b/tools/omni/voxcpm2/voxcpm2_llm.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "log.h"
+ 
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -12,7 +13,7 @@
+ // MiniCPMLM implementation
+ // ============================================================================
+ 
+-bool MiniCPMLM::init(const std::string & path, int n_gpu_layers) {
++bool MiniCPMLM::init(const std::string & path, int n_gpu_layers, int n_threads, int context_size) {
+     // Load model
+     struct llama_model_params model_params = llama_model_default_params();
+     if (n_gpu_layers >= 0) {
+@@ -39,8 +40,13 @@ bool MiniCPMLM::init(const std::string & path, int n_gpu_layers) {
+ 
+     // Create context
+     struct llama_context_params cparams_local = llama_context_default_params();
+-    cparams_local.n_ctx       = 32768;
++    // TTS only needs the prompt plus a few hundred acoustic steps. Allocating
++    // the former 32K context wastes hundreds of MB on mobile devices.
++    cparams_local.n_ctx       = std::max(2048, std::min(context_size, 8192));
+     cparams_local.n_batch     = 1024;
++    cparams_local.n_ubatch    = 512;
++    cparams_local.n_threads   = std::max(1, n_threads);
++    cparams_local.n_threads_batch = std::max(1, n_threads);
+     cparams_local.embeddings  = true;
+     cparams_local.offload_kqv = true;
+     cparams = cparams_local;
+@@ -53,7 +59,8 @@ bool MiniCPMLM::init(const std::string & path, int n_gpu_layers) {
+         return false;
+     }
+ 
+-    LOG_INF("MiniCPMLM: initialized successfully\n");
++    LOG_INF("MiniCPMLM: initialized successfully (n_ctx=%u, threads=%d)\n",
++            cparams_local.n_ctx, cparams_local.n_threads);
+     return true;
+ }
+ 
+diff --git a/tools/omni/voxcpm2/voxcpm2_llm.h b/tools/omni/voxcpm2/voxcpm2_llm.h
+index 99a33c0..5a307a5 100644
+--- a/tools/omni/voxcpm2/voxcpm2_llm.h
++++ b/tools/omni/voxcpm2/voxcpm2_llm.h
+@@ -42,7 +42,10 @@ struct MiniCPMLM {
+      * @param path       GGUF file path (LLM_ARCH_MINICPM format)
+      * @param n_gpu_layers  GPU offload layers (-1 = all)
+      */
+-    bool init(const std::string & path, int n_gpu_layers = -1);
++    bool init(const std::string & path,
++              int                 n_gpu_layers = -1,
++              int                 n_threads = 4,
++              int                 context_size = 4096);
+ 
+     /**
+      * Prefill: feed a batch of embedding tokens into the model.
+diff --git a/tools/omni/voxcpm2/voxcpm2_runtime.cpp b/tools/omni/voxcpm2/voxcpm2_runtime.cpp
+index f9a10e0..d66b3e1 100644
+--- a/tools/omni/voxcpm2/voxcpm2_runtime.cpp
++++ b/tools/omni/voxcpm2/voxcpm2_runtime.cpp
+@@ -1,6 +1,7 @@
+ #include "voxcpm2_runtime.h"
+ 
+ #include "ggml-alloc.h"
++#include "ggml-cpu.h"
+ #include "gguf.h"
+ #include "log.h"
+ 
+@@ -621,14 +622,23 @@ void VoxCPM2Runtime::clear_error() {
+ bool VoxCPM2Runtime::init(const std::string & base_lm_path,
+                           const std::string & acoustic_path,
+                           int                 n_gpu_layers,
+-                          bool                use_gpu_backend) {
++                          bool                use_gpu_backend,
++                          int                 n_threads,
++                          int                 context_size,
++                          const std::string & preferred_device) {
+     free();
+     clear_error();
+ 
+     ggml_backend_load_all();
+ 
+     if (use_gpu_backend) {
+-        backend = ggml_backend_init_best();
++        if (!preferred_device.empty()) {
++            backend = ggml_backend_init_by_name(preferred_device.c_str(), nullptr);
++            if (!backend) {
++                LOG_WRN("VoxCPM2Runtime: preferred backend %s unavailable\n", preferred_device.c_str());
++            }
++        }
++        if (!backend) backend = ggml_backend_init_best();
+         if (!backend) {
+             LOG_WRN("VoxCPM2Runtime: no GPU backend found, falling back to CPU\n");
+         }
+@@ -641,8 +651,11 @@ bool VoxCPM2Runtime::init(const std::string & base_lm_path,
+     }
+ 
+     LOG_INF("VoxCPM2Runtime: custom component backend=%s\n", ggml_backend_name(backend));
++    if (ggml_backend_is_cpu(backend)) {
++        ggml_backend_cpu_set_n_threads(backend, std::max(1, n_threads));
++    }
+ 
+-    if (!base_lm.init(base_lm_path, n_gpu_layers)) {
++    if (!base_lm.init(base_lm_path, n_gpu_layers, n_threads, context_size)) {
+         return fail("failed to initialize BaseLM");
+     }
+     if (!token_embeddings.load(base_lm_path)) {
+diff --git a/tools/omni/voxcpm2/voxcpm2_runtime.h b/tools/omni/voxcpm2/voxcpm2_runtime.h
+index 3e64178..2d9d87c 100644
+--- a/tools/omni/voxcpm2/voxcpm2_runtime.h
++++ b/tools/omni/voxcpm2/voxcpm2_runtime.h
+@@ -127,7 +127,10 @@ struct VoxCPM2Runtime {
+     bool init(const std::string & base_lm_path,
+               const std::string & acoustic_path,
+               int                 n_gpu_layers    = -1,
+-              bool                use_gpu_backend = true);
++              bool                use_gpu_backend = true,
++              int                 n_threads       = 4,
++              int                 context_size    = 4096,
++              const std::string & preferred_device = "");
+ 
+     bool prefill(const VoxCPM2PrefillInputs & inputs);
+     bool prefill_tokens(const std::vector<int32_t> & token_ids);
+@@ -177,6 +180,10 @@ struct VoxCPM2Runtime {
+ 
+     int sample_rate() const { return audio_vae.config.output_sample_rate(); }
+ 
++    std::string backend_name() const {
++        return backend ? ggml_backend_name(backend) : "none";
++    }
++
+   private:
+     ggml_backend_t                                    backend             = nullptr;  // owned
+     bool                                              is_initialized      = false;

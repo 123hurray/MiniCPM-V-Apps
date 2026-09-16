@@ -75,6 +75,7 @@ class TtsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NativeRuntime.enableSustainedPerformanceMode(this)
         createdWithLocale = LocaleManager.currentLanguage(this).tag
         setContentView(R.layout.activity_tts)
 

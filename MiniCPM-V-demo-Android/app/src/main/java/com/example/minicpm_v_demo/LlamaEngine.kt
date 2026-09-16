@@ -952,20 +952,8 @@ class LlamaEngine private constructor(
                 }
                 _state.value = LlamaState.Initializing
                 Log.i(TAG, "Loading native library...")
+                NativeRuntime.initialize(context)
                 Log.i(TAG, CpuFeatures.summary())
-
-                val variant = CpuFeatures.bestGgmlCpuVariant()
-                if (variant != null) {
-                    try {
-                        Log.i(TAG, "Pre-loading optimised ggml-cpu ($variant)")
-                        System.loadLibrary("ggml-cpu-$variant")
-                        Log.i(TAG, "Optimised ggml-cpu ($variant) loaded successfully")
-                    } catch (e: UnsatisfiedLinkError) {
-                        Log.w(TAG, "Optimised ggml-cpu-$variant not available, using baseline", e)
-                    }
-                }
-
-                System.loadLibrary("minicpm_v_demo")
                 init(nativeLibDir)
                 _state.value = LlamaState.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
@@ -983,6 +971,7 @@ class LlamaEngine private constructor(
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
             }
             try {
+                NativeRuntime.prepareForInference(context)
                 Log.i(TAG, "Checking access to model file... \n$pathToModel")
                 File(pathToModel).let {
                     require(it.exists()) { "File not found: $pathToModel" }
@@ -1074,6 +1063,7 @@ class LlamaEngine private constructor(
                 "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
             }
 
+            NativeRuntime.prepareForInference(context)
             Log.i(TAG, "Sending system prompt...")
             _readyForSystemPrompt = false
             _state.value = LlamaState.ProcessingSystemPrompt
@@ -1096,6 +1086,7 @@ class LlamaEngine private constructor(
                 "Cannot prefill image in ${_state.value.javaClass.simpleName}!"
             }
 
+            NativeRuntime.prepareForInference(context)
             Log.i(TAG, "Prefilling image...")
             _state.value = LlamaState.PrefillingImage
             val result = prefillImage(imageData, imageData.size)
@@ -1226,6 +1217,7 @@ class LlamaEngine private constructor(
         }
 
         try {
+            NativeRuntime.prepareForInference(context)
             _cancelGeneration = false
             Log.i(TAG, "Sending user prompt...")
             _readyForSystemPrompt = false

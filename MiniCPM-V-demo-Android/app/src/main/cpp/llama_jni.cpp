@@ -14,6 +14,7 @@
 #include "sampling.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "runtime_config.h"
 
 template<class T>
 static std::string join(const std::vector<T> &values, const std::string &delim) {
@@ -30,8 +31,6 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 //   nBatch=2048, temperature=0.7, top_k=0, top_p=1.0, penalty_repeat=1.0,
 //   nPredict=100. Keeping Android in lockstep avoids per-platform
 //   divergence in generation quality and prefill latency.
-constexpr int   N_THREADS               = 4;
-
 constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;
 // Tool loops need room for the system prompt, prior tool results and a longer
 // model response. This larger KV cache is enabled only while Agent mode is on.
@@ -136,6 +135,10 @@ extern "C"
 JNIEXPORT jint JNICALL
 Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
+    runtime_apply_thread_policy();
+    if (runtime_backend_mode() == RuntimeBackendMode::Cpu) {
+        model_params.n_gpu_layers = 0;
+    }
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGi("%s: Loading model from: \n%s\n", __func__, model_path);
@@ -152,6 +155,11 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring
     LOGi("%s: Model file size: %ld bytes (%.2f GB)", __func__, file_size, file_size / (1024.0 * 1024.0 * 1024.0));
 
     auto *model = llama_model_load_from_file(model_path, model_params);
+    if (!model && model_params.n_gpu_layers != 0) {
+        LOGw("%s: Accelerator model load failed; retrying on CPU", __func__);
+        model_params.n_gpu_layers = 0;
+        model = llama_model_load_from_file(model_path, model_params);
+    }
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
         LOGe("%s: llama_model_load_from_file returned null! Check logcat for llama.cpp internal errors.", __func__);
@@ -182,7 +190,7 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_loadMmproj(JNIEnv *env, jobject,
     g_image_max_slice_nums       = (jint) jimage_max_slice_nums;
     mparams.image_max_slice_nums = g_image_max_slice_nums;
 
-    mparams.n_threads = N_THREADS;
+    mparams.n_threads = runtime_thread_count();
 
     g_ctx_vision = mtmd_init_from_file(mmproj_path, g_model, mparams);
     env->ReleaseStringUTFChars(jmmproj_path, mmproj_path);
@@ -272,7 +280,9 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
         return nullptr;
     }
 
-    LOGi("%s: Using %d threads (aligned with iOS demo MTMDParams)", __func__, N_THREADS);
+    const int n_threads = runtime_thread_count();
+    runtime_apply_thread_policy();
+    LOGi("%s: Using %d adaptive threads", __func__, n_threads);
 
     llama_context_params ctx_params = llama_context_default_params();
     const int trained_context_size = llama_model_n_ctx_train(model);
@@ -283,8 +293,8 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     ctx_params.n_ctx = n_ctx;
     ctx_params.n_batch = BATCH_SIZE;
     ctx_params.n_ubatch = BATCH_SIZE;
-    ctx_params.n_threads = N_THREADS;
-    ctx_params.n_threads_batch = N_THREADS;
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads;
     auto *context = llama_init_from_model(g_model, ctx_params);
     if (context == nullptr) {
         LOGe("%s: llama_new_context_with_model() returned null)", __func__);
@@ -441,6 +451,8 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_processSystemPrompt(
         jobject /*unused*/,
         jstring jsystem_prompt
 ) {
+    runtime_apply_thread_policy();
+    llama_set_n_threads(g_context, runtime_thread_count(), runtime_thread_count());
     reset_short_term_states();
 
     const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
@@ -513,6 +525,8 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_prefillImage(
         jbyteArray jimage_data,
         jint jimage_size
 ) {
+    runtime_apply_thread_policy();
+    llama_set_n_threads(g_context, runtime_thread_count(), runtime_thread_count());
     if (!g_ctx_vision) {
         LOGe("%s: mmproj not loaded!", __func__);
         return 1;
@@ -576,6 +590,7 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_prefillImage(
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_example_minicpm_1v_1demo_LlamaEngine_fullReset(JNIEnv *, jobject) {
+    runtime_apply_thread_policy();
     reset_long_term_states();
     reset_short_term_states();
 
@@ -628,6 +643,8 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_processUserPrompt(
         jstring juser_prompt,
         jint n_predict
 ) {
+    runtime_apply_thread_policy();
+    llama_set_n_threads(g_context, runtime_thread_count(), runtime_thread_count());
     reset_short_term_states();
 
     const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);

@@ -1,6 +1,8 @@
 package com.example.minicpm_v_demo
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
@@ -42,6 +44,7 @@ class ModelManagerActivity : AppCompatActivity() {
     private lateinit var recyclerModels: RecyclerView
     private lateinit var tvLanguageValue: TextView
     private lateinit var tvAgentSettingsValue: TextView
+    private lateinit var tvPerformanceValue: TextView
 
     private lateinit var engine: LlamaEngine
     private lateinit var modelAdapter: ModelAdapter
@@ -85,6 +88,7 @@ class ModelManagerActivity : AppCompatActivity() {
         recyclerModels = findViewById(R.id.recycler_models)
         tvLanguageValue = findViewById(R.id.tv_language_value)
         tvAgentSettingsValue = findViewById(R.id.tv_agent_settings_value)
+        tvPerformanceValue = findViewById(R.id.tv_performance_value)
 
         engine = LlamaEngine.getInstance(applicationContext)
 
@@ -94,6 +98,7 @@ class ModelManagerActivity : AppCompatActivity() {
         observeDownloadStatus()
         updateLanguageDisplay()
         updateAgentSettingsDisplay()
+        updatePerformanceDisplay()
 
         btnDownload.setOnClickListener { onDownloadClicked() }
         btnImport.setOnClickListener { onImportClicked() }
@@ -101,6 +106,7 @@ class ModelManagerActivity : AppCompatActivity() {
         btnDeleteModel.setOnClickListener { confirmDeleteModel() }
         findViewById<View>(R.id.btn_language).setOnClickListener { showLanguagePicker() }
         findViewById<View>(R.id.btn_agent_settings).setOnClickListener { showAgentSettings() }
+        findViewById<View>(R.id.btn_performance).setOnClickListener { showPerformanceSettings() }
     }
 
     private fun setupModelList() {
@@ -586,6 +592,46 @@ class ModelManagerActivity : AppCompatActivity() {
     private fun updateAgentSettingsDisplay() {
         tvAgentSettingsValue.text = "${LlamaEngine.getAgentContextLength(this)} / " +
             LlamaEngine.getAgentMaxOutputTokens(this)
+    }
+
+    private fun updatePerformanceDisplay() {
+        tvPerformanceValue.text = NativeRuntime.shortSummary(this)
+    }
+
+    private fun showPerformanceSettings() {
+        val modes = NativeRuntime.BackendMode.entries.toTypedArray()
+        val labels = arrayOf(
+            getString(R.string.performance_backend_auto),
+            getString(R.string.performance_backend_cpu),
+            getString(R.string.performance_backend_gpu),
+            getString(R.string.performance_backend_hexagon),
+        )
+        var selected = modes.indexOf(NativeRuntime.backendMode(this)).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.performance_settings)
+            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                NativeRuntime.setBackendMode(this, modes[selected])
+                updatePerformanceDisplay()
+                Toast.makeText(this, R.string.performance_restart_hint, Toast.LENGTH_LONG).show()
+            }
+            .setNeutralButton(R.string.performance_diagnostics) { _, _ -> showPerformanceDiagnostics() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showPerformanceDiagnostics() {
+        val report = NativeRuntime.diagnostics(this)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.performance_diagnostics)
+            .setMessage(report)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton(R.string.copy) { _, _ ->
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("MiniCPM diagnostics", report))
+                Toast.makeText(this, R.string.performance_diagnostics_copied, Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     private fun showAgentSettings() {
