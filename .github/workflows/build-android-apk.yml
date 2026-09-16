@@ -57,13 +57,16 @@ jobs:
           "$AAPT" dump badging MiniCPM-V-demo-Android-v3.2-unsigned.apk | tee /tmp/apk-badging.txt
           grep -F "package: name='com.example.minicpm_v_demo' versionCode='24' versionName='3.2'" \
             /tmp/apk-badging.txt
+          unzip -t MiniCPM-V-demo-Android-v3.2-unsigned.apk
+          sha256sum MiniCPM-V-demo-Android-v3.2-unsigned.apk > SHA256SUMS
+          tar -czf MiniCPM-V-demo-Android-v3.2-signing-inputs.tar.gz \
+            MiniCPM-V-demo-Android-v3.2-unsigned.apk apksigner.jar SHA256SUMS
 
       - name: Upload unsigned APK and signer
         uses: actions/upload-artifact@v4
         with:
           name: MiniCPM-V-demo-Android-v3.2-signing-inputs
           path: |
-            MiniCPM-V-demo-Android-v3.2-unsigned.apk
-            apksigner.jar
+            MiniCPM-V-demo-Android-v3.2-signing-inputs.tar.gz
           if-no-files-found: error
           retention-days: 30
