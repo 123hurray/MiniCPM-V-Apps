@@ -36,6 +36,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y glslc libvulkan-dev spirv-headers
+          mkdir -p /tmp/minicpm-vulkan-headers/include
+          cp -R /usr/include/vulkan /tmp/minicpm-vulkan-headers/include/
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" \

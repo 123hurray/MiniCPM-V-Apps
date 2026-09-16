@@ -64,6 +64,7 @@ android {
                     // Android cross-compilation does not search host package
                     // roots, even though shader generation runs on the host.
                     arguments += "-DSPIRV-Headers_DIR=/usr/share/cmake/SPIRV-Headers"
+                    arguments += "-DVulkan_INCLUDE_DIR=/tmp/minicpm-vulkan-headers/include"
                 }
                 if (enableOpenCl.get()) {
                     arguments += "-DCMAKE_PREFIX_PATH=${openClSdkRoot.get()}"
