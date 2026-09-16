@@ -60,6 +60,11 @@ android {
                 arguments += "-DGGML_OPENCL=${if (enableOpenCl.get()) "ON" else "OFF"}"
                 arguments += "-DGGML_HEXAGON=${if (enableHexagon.get()) "ON" else "OFF"}"
                 arguments += "-DLLAMA_CURL=OFF"
+                if (enableVulkan.get()) {
+                    // Android cross-compilation does not search host package
+                    // roots, even though shader generation runs on the host.
+                    arguments += "-DSPIRV-Headers_DIR=/usr/share/cmake/SPIRV-Headers"
+                }
                 if (enableOpenCl.get()) {
                     arguments += "-DCMAKE_PREFIX_PATH=${openClSdkRoot.get()}"
                     arguments += "-DGGML_OPENCL_USE_ADRENO_KERNELS=ON"
