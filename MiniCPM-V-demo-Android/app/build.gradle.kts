@@ -31,7 +31,7 @@ android {
         // Koog 1.2 targets JVM 17 and its stable dependency graph uses
         // MethodHandle APIs available from Android 8.0 onward.
         // This sets Android 8.0 (Oreo) as the minimum supported release.
-        minSdk = 26
+        minSdk = 28
         targetSdk = 36
         versionCode = 28
         versionName = "3.6"
