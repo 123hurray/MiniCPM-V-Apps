@@ -257,7 +257,12 @@ class MiniMindOEngine(private val context: Context) : Closeable {
                     )
                 }
                 audioCodes[layer] += code
-                if (audioStops[layer] < 0 && code >= 2048) audioStops[layer] = audioCodes[layer].lastIndex
+                // AUDIO_PAD is used before a delayed codebook starts. It is
+                // not an end token. Upstream records a stop only for a code
+                // that was actually sampled after this layer became active.
+                if (audioStep >= layer && audioStops[layer] < 0 && code >= 2048) {
+                    audioStops[layer] = audioCodes[layer].lastIndex
+                }
             }
 
             if (!textFinished) {
