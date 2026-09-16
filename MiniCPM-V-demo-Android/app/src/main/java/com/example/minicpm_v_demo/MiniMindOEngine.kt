@@ -19,6 +19,9 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         private const val TEXT_EOS = 2
         private const val ENTER_TOKEN = 201
         private const val MAX_NEW_TOKENS = 256
+        private const val MIMI_WINDOW_FRAMES = 6
+        private const val MIMI_OVERLAP_FRAMES = 2
+        private const val MIMI_SAMPLES_PER_FRAME = 1920
     }
 
     private var main: Module? = null
@@ -111,6 +114,7 @@ class MiniMindOEngine(private val context: Context) : Closeable {
         var firstFinished = true
         var nextAudioInput = IntArray(8) { AUDIO_PAD }
         var position = promptIds.size
+        var emittedAudio = false
 
         for (step in 0 until MAX_NEW_TOKENS) {
             coroutineContext.ensureActive()
@@ -146,7 +150,15 @@ class MiniMindOEngine(private val context: Context) : Closeable {
                 val active = (0 until 8).count { layer ->
                     audioStops[layer] < 0 || step - 7 + layer < audioStops[layer]
                 }
-                if (active == 8 && frame.all { it in 0 until 2048 }) playableFrames += frame
+                if (active == 8) {
+                    // The first delayed frame contains AUDIO_PAD in the early
+                    // codebooks. Upstream maps those placeholders to code 0
+                    // before Mimi decoding; dropping the whole frame makes
+                    // short replies end before a decodable window exists.
+                    playableFrames += IntArray(8) { layer ->
+                        frame[layer].takeIf { it in 0 until 2048 } ?: 0
+                    }
+                }
             }
             val shouldDecode = if (lastDecodeFrameCount == 0) {
                 playableFrames.size >= 6
@@ -156,7 +168,12 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             if (shouldDecode) {
                 val window = playableFrames.takeLast(6)
                 val pcm = decodeMimi(mimiModule, window)
-                val drop = if (lastDecodeFrameCount == 0) 0 else 2 * 1920
+                val drop = if (lastDecodeFrameCount == 0) 0 else
+                    MIMI_OVERLAP_FRAMES * MIMI_SAMPLES_PER_FRAME
+                if (!emittedAudio) {
+                    emittedAudio = true
+                    onStatus("MiniMind-O 正在播放语音…")
+                }
                 onAudio(pcm, drop)
                 lastDecodeFrameCount = playableFrames.size
             }
@@ -176,6 +193,29 @@ class MiniMindOEngine(private val context: Context) : Closeable {
             )
             position++
         }
+
+        // Fixed-shape mobile Mimi accepts six frames. Flush the 1..5 frames
+        // left at end of generation by padding the causal tail, then expose
+        // only samples belonging to real new frames. Without this path short
+        // answers produce text but never reach AudioTrack.
+        if (playableFrames.size > lastDecodeFrameCount) {
+            val newFrames = playableFrames.size - lastDecodeFrameCount
+            val overlap = if (lastDecodeFrameCount > 0) {
+                minOf(MIMI_OVERLAP_FRAMES, lastDecodeFrameCount)
+            } else {
+                0
+            }
+            val start = lastDecodeFrameCount - overlap
+            val window = playableFrames.subList(start, playableFrames.size).toMutableList()
+            while (window.size < MIMI_WINDOW_FRAMES) window += window.last()
+            val pcm = decodeMimi(mimiModule, window.take(MIMI_WINDOW_FRAMES))
+            val drop = overlap * MIMI_SAMPLES_PER_FRAME
+            val end = minOf(pcm.size, drop + newFrames * MIMI_SAMPLES_PER_FRAME)
+            if (!emittedAudio) onStatus("MiniMind-O 正在播放语音…")
+            onAudio(pcm.copyOfRange(0, end), drop)
+            emittedAudio = true
+        }
+        if (!emittedAudio) onStatus("本轮未生成可播放语音")
         onStatus("请继续说话")
     }
 

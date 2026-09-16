@@ -308,7 +308,7 @@ class MiniMindOActivity : AppCompatActivity() {
         val track = audioTrack ?: AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -316,16 +316,40 @@ class MiniMindOActivity : AppCompatActivity() {
                 AudioFormat.Builder()
                     .setSampleRate(24_000)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .build()
             )
-            .setBufferSizeInBytes(24_000 * 4)
+            .setBufferSizeInBytes(
+                max(
+                    AudioTrack.getMinBufferSize(
+                        24_000,
+                        AudioFormat.CHANNEL_OUT_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                    ),
+                    24_000 * 2,
+                )
+            )
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-            .also { audioTrack = it; it.play() }
+            .also {
+                check(it.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack 初始化失败" }
+                it.setVolume(1f)
+                audioTrack = it
+                it.play()
+            }
         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
         val start = drop.coerceIn(0, values.size)
-        track.write(values, start, values.size - start, AudioTrack.WRITE_BLOCKING)
+        val pcm = ShortArray(values.size - start) { index ->
+            (values[start + index].coerceIn(-1f, 1f) * Short.MAX_VALUE)
+                .toInt()
+                .toShort()
+        }
+        var written = 0
+        while (written < pcm.size) {
+            val count = track.write(pcm, written, pcm.size - written, AudioTrack.WRITE_BLOCKING)
+            check(count > 0) { "AudioTrack 写入失败：$count" }
+            written += count
+        }
     }
 
     private fun stopConversation() {
