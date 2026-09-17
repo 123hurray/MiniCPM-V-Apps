@@ -48,14 +48,6 @@ constexpr int   BATCH_SIZE              = 2048;
 // repetition_penalty=1.0). MiniCPM5's model card explicitly warns that
 // llama.cpp's min_p=0.05 default can trap the model in repetition loops.
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.7f;
-// Mobile Vulkan drivers share RAM with the CPU and can be killed by Android
-// while llama.cpp is allocating a full-model offload.  Keep the explicit GPU
-// mode useful, but cap it to a small, predictable number of transformer
-// layers.  Auto intentionally stays on CPU until an out-of-process Vulkan
-// health check exists: a native driver abort cannot be caught by our normal
-// "load returned null" fallback.
-constexpr int   MOBILE_VULKAN_GPU_LAYERS = 4;
-constexpr long  MOBILE_VULKAN_MAX_MODEL_BYTES = 2L * 1024L * 1024L * 1024L;
 
 static llama_model                      * g_model;
 static llama_context                    * g_context;
@@ -144,16 +136,12 @@ JNIEXPORT jint JNICALL
 Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
     runtime_apply_thread_policy();
-    const RuntimeBackendMode requested_mode = runtime_backend_mode();
-    // llama_model_default_params() uses -1, which means all model layers in
-    // this llama.cpp revision.  Never leave that implicit value in an Android
-    // app: Auto and unsupported Hexagon previously became a full Vulkan
-    // offload and crashed before the CPU retry could run.
-    model_params.n_gpu_layers = requested_mode == RuntimeBackendMode::Gpu
-        ? MOBILE_VULKAN_GPU_LAYERS
-        : 0;
-    LOGi("%s: requested backend=%d, Vulkan layers=%d", __func__,
-         static_cast<int>(requested_mode), model_params.n_gpu_layers);
+    // This Android stability build deliberately has no process-local GPU/NPU
+    // backend.  A vendor Vulkan abort terminates the process and cannot be
+    // recovered by the null-return retry below, so enforce CPU here as a
+    // second line of defence against stale preferences or direct JNI calls.
+    model_params.n_gpu_layers = 0;
+    LOGi("%s: Android stability policy: CPU backend", __func__);
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGi("%s: Loading model from: \n%s\n", __func__, model_path);
@@ -168,16 +156,6 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring
     long file_size = ftell(f);
     fclose(f);
     LOGi("%s: Model file size: %ld bytes (%.2f GB)", __func__, file_size, file_size / (1024.0 * 1024.0 * 1024.0));
-
-    // Large models already consume most of the address space on typical
-    // phones.  Vulkan uses the same physical RAM but needs additional staging
-    // and graph allocations, so even a small offload can make the OS kill the
-    // process.  Restrict the experimental path to compact models.
-    if (model_params.n_gpu_layers > 0 &&
-        (file_size <= 0 || file_size > MOBILE_VULKAN_MAX_MODEL_BYTES)) {
-        LOGw("%s: model is too large for safe mobile Vulkan offload; using CPU", __func__);
-        model_params.n_gpu_layers = 0;
-    }
 
     auto *model = llama_model_load_from_file(model_path, model_params);
     if (!model && model_params.n_gpu_layers != 0) {

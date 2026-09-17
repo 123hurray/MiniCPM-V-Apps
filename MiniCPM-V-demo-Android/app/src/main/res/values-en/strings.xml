@@ -172,6 +172,7 @@
     <string name="performance_backend_hexagon">Hexagon NPU (not packaged; uses CPU)</string>
     <string name="performance_diagnostics">Performance diagnostics</string>
     <string name="performance_restart_hint">Saved; reload the model to apply</string>
+    <string name="performance_cpu_only_reason">In-process Vulkan, OpenCL, and Hexagon are disabled after the SM8550 crash diagnosis. This build uses the ARMv8.6-optimised CPU backend and automatically migrates accelerator preferences saved by older versions.</string>
     <string name="performance_diagnostics_copied">Diagnostics copied</string>
     <string name="copy">Copy</string>
 

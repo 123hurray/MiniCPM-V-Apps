@@ -82,15 +82,23 @@ object NativeRuntime {
     }
 
     fun backendMode(context: Context): BackendMode {
-        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_BACKEND, BackendMode.AUTO.storedValue)
-        return BackendMode.entries.firstOrNull { it.storedValue == stored } ?: BackendMode.AUTO
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = preferences.getString(KEY_BACKEND, BackendMode.CPU.storedValue)
+        val requested = BackendMode.entries.firstOrNull { it.storedValue == stored } ?: BackendMode.CPU
+        if (requested != BackendMode.CPU) {
+            Log.w(TAG, "Migrating unsafe backend preference ${requested.storedValue} to CPU")
+            preferences.edit().putString(KEY_BACKEND, BackendMode.CPU.storedValue).apply()
+        }
+        return BackendMode.CPU
     }
 
     fun setBackendMode(context: Context, mode: BackendMode) {
+        if (mode != BackendMode.CPU) {
+            Log.w(TAG, "Backend ${mode.storedValue} is disabled in the stability build; using CPU")
+        }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_BACKEND, mode.storedValue)
+            .putString(KEY_BACKEND, BackendMode.CPU.storedValue)
             .apply()
         if (loaded) configure(context.applicationContext)
     }
@@ -131,13 +139,8 @@ object NativeRuntime {
 
     fun shortSummary(context: Context): String {
         val profile = CpuFeatures.deviceProfile()
-        val policy = when (backendMode(context)) {
-            BackendMode.GPU -> "GPU-4L"
-            BackendMode.AUTO -> "AUTO→CPU"
-            BackendMode.HEXAGON -> "HEXAGON→CPU"
-            BackendMode.CPU -> "CPU"
-        }
-        return "$policy / ${profile.recommendedThreads}T"
+        backendMode(context) // Migrates preferences saved by v3.6/v3.7.
+        return "CPU / ${profile.recommendedThreads}T"
     }
 
     private fun configure(context: Context) {

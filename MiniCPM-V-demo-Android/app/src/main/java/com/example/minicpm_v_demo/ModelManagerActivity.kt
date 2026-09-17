@@ -599,24 +599,14 @@ class ModelManagerActivity : AppCompatActivity() {
     }
 
     private fun showPerformanceSettings() {
-        val modes = NativeRuntime.BackendMode.entries.toTypedArray()
-        val labels = arrayOf(
-            getString(R.string.performance_backend_auto),
-            getString(R.string.performance_backend_cpu),
-            getString(R.string.performance_backend_gpu),
-            getString(R.string.performance_backend_hexagon),
-        )
-        var selected = modes.indexOf(NativeRuntime.backendMode(this)).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(R.string.performance_settings)
-            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setMessage(R.string.performance_cpu_only_reason)
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                NativeRuntime.setBackendMode(this, modes[selected])
+                NativeRuntime.setBackendMode(this, NativeRuntime.BackendMode.CPU)
                 updatePerformanceDisplay()
-                Toast.makeText(this, R.string.performance_restart_hint, Toast.LENGTH_LONG).show()
             }
             .setNeutralButton(R.string.performance_diagnostics) { _, _ -> showPerformanceDiagnostics() }
-            .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 

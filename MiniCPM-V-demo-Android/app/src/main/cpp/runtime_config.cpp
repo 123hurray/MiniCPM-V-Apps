@@ -31,6 +31,12 @@ const char * mode_name(RuntimeBackendMode mode) {
 }
 
 void runtime_configure(int threads, const std::vector<int> & performance_cpus, RuntimeBackendMode mode) {
+    if (mode != RuntimeBackendMode::Cpu) {
+        __android_log_print(ANDROID_LOG_WARN, TAG,
+                            "backend %s disabled by Android stability policy; forcing CPU",
+                            mode_name(mode));
+        mode = RuntimeBackendMode::Cpu;
+    }
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_threads = std::clamp(threads, 1, 8);

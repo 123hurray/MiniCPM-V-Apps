@@ -6,7 +6,10 @@ plugins {
 
 val enableVulkan = providers.gradleProperty("MINICPMV_ENABLE_VULKAN")
     .map(String::toBoolean)
-    .orElse(true)
+    // Disabled in the distributed Android stability build. On SM8550 the
+    // vendor Vulkan path can abort the process before llama.cpp can return an
+    // error, so an in-process fallback is not sufficient.
+    .orElse(false)
 val openClSdkRoot = providers.environmentVariable("OPENCL_SDK_ROOT")
 val enableOpenCl = providers.gradleProperty("MINICPMV_ENABLE_OPENCL")
     .map(String::toBoolean)
@@ -33,8 +36,8 @@ android {
         // This sets Android 8.0 (Oreo) as the minimum supported release.
         minSdk = 28
         targetSdk = 36
-        versionCode = 29
-        versionName = "3.7"
+        versionCode = 30
+        versionName = "3.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
