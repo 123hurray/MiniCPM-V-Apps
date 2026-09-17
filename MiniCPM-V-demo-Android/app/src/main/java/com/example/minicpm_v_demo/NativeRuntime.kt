@@ -45,6 +45,7 @@ object NativeRuntime {
     @Volatile private var configuredThreads = 4
     @Volatile private var selectedVariant = "baseline"
     @Volatile private var diagnosticLogFile: File? = null
+    @Volatile private var liveDiagnosticPath: String? = null
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
 
     private external fun nativeConfigureRuntime(
@@ -52,7 +53,7 @@ object NativeRuntime {
         performanceCpuIds: IntArray,
         backendMode: Int,
     )
-    private external fun nativeInitializeDiagnostics(logPath: String)
+    private external fun nativeInitializeDiagnostics(logPath: String, publicLogFd: Int)
     private external fun nativeRuntimeDiagnostics(): String
 
     fun initialize(context: Context) {
@@ -77,7 +78,9 @@ object NativeRuntime {
                         }
                     }
                     System.loadLibrary("minicpm_v_demo")
-                    nativeInitializeDiagnostics(diagnosticFile.absolutePath)
+                    val liveLog = createLiveDiagnosticFile(context.applicationContext)
+                    liveDiagnosticPath = liveLog.second
+                    nativeInitializeDiagnostics(diagnosticFile.absolutePath, liveLog.first)
                     loaded = true
                 } catch (error: UnsatisfiedLinkError) {
                     loadError = error.message
@@ -153,6 +156,7 @@ object NativeRuntime {
             appendLine("Preference: ${backendMode(context).storedValue}")
             appendLine("Packaged backends: CPU=true, Vulkan=${"libggml-vulkan.so" in libraries}, OpenCL=${"libggml-opencl.so" in libraries}, Hexagon=${"libggml-hexagon.so" in libraries}")
             appendLine("Diagnostic log: ${prepareDiagnosticFile(context).absolutePath}")
+            liveDiagnosticPath?.let { appendLine("Live public log: $it") }
             previousExitSummary(context)?.let { appendLine("Previous exit: $it") }
             append("Native: $native")
             loadError?.let { append("\nLoad error: $it") }
@@ -248,6 +252,31 @@ object NativeRuntime {
         }
         diagnosticLogFile = current
         return current
+    }
+
+    private fun createLiveDiagnosticFile(context: Context): Pair<Int, String> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return -1 to "unavailable"
+        return runCatching {
+            val name = "minicpm-live-${
+                SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+            }.txt"
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(
+                    MediaStore.Downloads.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_DOWNLOADS}/MiniCPMLogs",
+                )
+            }
+            val uri = checkNotNull(
+                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values),
+            ) { "无法创建实时日志" }
+            val descriptor = checkNotNull(
+                context.contentResolver.openFileDescriptor(uri, "wa"),
+            ) { "无法打开实时日志" }
+            descriptor.detachFd() to "Download/MiniCPMLogs/$name"
+        }.onFailure { Log.w(TAG, "Unable to create public live diagnostic log", it) }
+            .getOrElse { -1 to "unavailable" }
     }
 
     private fun packagedLibraries(context: Context): Set<String> {

@@ -17,6 +17,7 @@
 
 namespace {
 std::atomic<int> g_log_fd{-1};
+std::atomic<int> g_public_log_fd{-1};
 std::atomic<bool> g_handlers_installed{false};
 
 char priority_letter(int priority) {
@@ -50,8 +51,10 @@ void write_unsigned(int fd, unsigned long value, int base) {
 }
 
 void native_signal_handler(int signal_number, siginfo_t * info, void *) {
-    const int fd = g_log_fd.load(std::memory_order_relaxed);
-    if (fd >= 0) {
+    for (const int fd : {
+            g_log_fd.load(std::memory_order_relaxed),
+            g_public_log_fd.load(std::memory_order_relaxed)}) {
+        if (fd < 0) continue;
         static constexpr char prefix[] = "\n[FATAL] native signal=";
         static constexpr char tid_text[] = " tid=";
         static constexpr char address_text[] = " address=0x";
@@ -70,6 +73,7 @@ void native_signal_handler(int signal_number, siginfo_t * info, void *) {
     syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), signal_number);
     _exit(128 + signal_number);
 }
+
 }
 
 void diagnostic_log_set_path(const char * path) {
@@ -77,6 +81,12 @@ void diagnostic_log_set_path(const char * path) {
     const int new_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     if (new_fd < 0) return;
     const int old_fd = g_log_fd.exchange(new_fd);
+    if (old_fd >= 0) close(old_fd);
+}
+
+void diagnostic_log_set_public_fd(int fd) {
+    if (fd < 0) return;
+    const int old_fd = g_public_log_fd.exchange(fd);
     if (old_fd >= 0) close(old_fd);
 }
 
@@ -92,8 +102,7 @@ void diagnostic_log_install_crash_handlers() {
 }
 
 void diagnostic_log_write(int priority, const char * tag, const char * message) {
-    const int fd = g_log_fd.load();
-    if (fd < 0 || !message) return;
+    if (!message) return;
     char line[4096];
     const std::time_t now = std::time(nullptr);
     const int prefix = std::snprintf(line, sizeof(line), "[%lld] [%c] %s: ",
@@ -107,11 +116,21 @@ void diagnostic_log_write(int priority, const char * tag, const char * message) 
     std::memcpy(line + offset, message, message_size);
     size_t total = offset + message_size;
     if (total == 0 || line[total - 1] != '\n') line[total++] = '\n';
-    write_all(fd, line, total);
+    for (const int fd : {g_log_fd.load(), g_public_log_fd.load()}) {
+        if (fd < 0) continue;
+        write_all(fd, line, total);
+        if (priority >= ANDROID_LOG_WARN) fdatasync(fd);
+    }
+}
+
+void diagnostic_log_flush() {
+    for (const int fd : {g_log_fd.load(), g_public_log_fd.load()}) {
+        if (fd >= 0) fdatasync(fd);
+    }
 }
 
 void diagnostic_log_printf(int priority, const char * tag, const char * format, ...) {
-    if (g_log_fd.load() < 0 || !format) return;
+    if ((g_log_fd.load() < 0 && g_public_log_fd.load() < 0) || !format) return;
     char message[3072];
     va_list args;
     va_start(args, format);
@@ -122,11 +141,12 @@ void diagnostic_log_printf(int priority, const char * tag, const char * format, 
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_minicpm_1v_1demo_NativeRuntime_nativeInitializeDiagnostics(
-        JNIEnv * env, jobject, jstring log_path) {
+        JNIEnv * env, jobject, jstring log_path, jint public_log_fd) {
     if (!log_path) return;
     const char * path = env->GetStringUTFChars(log_path, nullptr);
     diagnostic_log_set_path(path);
     env->ReleaseStringUTFChars(log_path, path);
+    diagnostic_log_set_public_fd(static_cast<int>(public_log_fd));
     diagnostic_log_install_crash_handlers();
     diagnostic_log_printf(ANDROID_LOG_INFO, "NativeRuntime", "native diagnostics initialized");
 }

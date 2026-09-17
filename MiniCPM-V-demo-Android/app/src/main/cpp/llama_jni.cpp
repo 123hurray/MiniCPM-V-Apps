@@ -51,6 +51,7 @@ constexpr int   BATCH_SIZE              = 2048;
 // llama.cpp's min_p=0.05 default can trap the model in repetition loops.
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.7f;
 constexpr int   MOBILE_VULKAN_SAFE_LAYERS = 4;
+constexpr int   MOBILE_VULKAN_UBATCH_SIZE = 16;
 
 static void apply_adreno_vulkan_safety_policy() {
     // Conservative settings for Qualcomm's Android Vulkan driver.  The GPU is
@@ -68,9 +69,13 @@ static void apply_adreno_vulkan_safety_policy() {
     setenv("GGML_VK_PREFER_HOST_MEMORY", "1", 1);
     setenv("GGML_VK_ALLOW_SYSMEM_FALLBACK", "1", 1);
     setenv("GGML_VK_SUBALLOCATION_BLOCK_SIZE", "67108864", 1);
-    setenv("GGML_OP_OFFLOAD_MIN_BATCH", "64", 1);
+    // Keep graph-level op offload disabled. Layer matmuls still execute on
+    // Vulkan, but prompt-length changes no longer switch to a different graph
+    // path around the 32/64-token boundary observed on Adreno 740.
+    setenv("GGML_OP_OFFLOAD_MIN_BATCH", "4096", 1);
     LOGi("Adreno Vulkan safety policy enabled: layers=%d async=off fusion=off "
-         "coopmat=off int-dot=off suballoc=64MiB", MOBILE_VULKAN_SAFE_LAYERS);
+         "coopmat=off int-dot=off suballoc=64MiB op-offload-min=4096 ubatch=%d",
+         MOBILE_VULKAN_SAFE_LAYERS, MOBILE_VULKAN_UBATCH_SIZE);
 }
 
 static llama_model                      * g_model;
@@ -335,7 +340,9 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     }
     ctx_params.n_ctx = n_ctx;
     ctx_params.n_batch = BATCH_SIZE;
-    ctx_params.n_ubatch = BATCH_SIZE;
+    ctx_params.n_ubatch = runtime_backend_mode() == RuntimeBackendMode::Gpu
+        ? MOBILE_VULKAN_UBATCH_SIZE
+        : BATCH_SIZE;
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
     auto *context = llama_init_from_model(g_model, ctx_params);
@@ -460,7 +467,10 @@ static int decode_tokens_in_batches(
         const llama_tokens &tokens,
         const llama_pos start_pos,
         const bool compute_last_logit = false) {
-    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), start_pos);
+    LOGi("%s: decode begin tokens=%d start=%d backend=%d ubatch=%d", __func__,
+         (int) tokens.size(), start_pos, static_cast<int>(runtime_backend_mode()),
+         runtime_backend_mode() == RuntimeBackendMode::Gpu ? MOBILE_VULKAN_UBATCH_SIZE : BATCH_SIZE);
+    diagnostic_log_flush();
     for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE) {
         const int cur_batch_size = std::min((int) tokens.size() - i, BATCH_SIZE);
         common_batch_clear(batch);
@@ -479,6 +489,9 @@ static int decode_tokens_in_batches(
         }
 
         const int decode_result = llama_decode(context, batch);
+        LOGi("%s: decode end batch_offset=%d batch_tokens=%d result=%d", __func__,
+             i, cur_batch_size, decode_result);
+        diagnostic_log_flush();
         if (decode_result) {
             LOGe("%s: llama_decode failed w/ %d", __func__, decode_result);
             return 1;
