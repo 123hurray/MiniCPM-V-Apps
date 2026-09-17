@@ -181,11 +181,14 @@
     <string name="performance_settings_description">后端、线程、温控与诊断</string>
     <string name="performance_backend_auto">自动（稳定优先，当前使用 CPU）</string>
     <string name="performance_backend_cpu">仅 CPU（最稳定）</string>
-    <string name="performance_backend_gpu">GPU / Vulkan（小模型仅卸载 4 层，实验）</string>
+    <string name="performance_backend_gpu">GPU / Vulkan（Adreno 安全模式，4 层）</string>
     <string name="performance_backend_hexagon">Hexagon NPU（未打包，回退 CPU）</string>
     <string name="performance_diagnostics">性能诊断</string>
     <string name="performance_restart_hint">设置已保存，将在重新加载模型后生效</string>
     <string name="performance_cpu_only_reason">已根据 SM8550 实机崩溃诊断禁用进程内 Vulkan、OpenCL 和 Hexagon。当前固定使用 ARMv8.6 优化 CPU 后端；旧版保存的加速器偏好会自动迁移。</string>
+    <string name="export_log">导出日志</string>
+    <string name="performance_log_exported">日志已保存到 %1$s</string>
+    <string name="performance_log_export_failed">日志导出失败：%1$s</string>
     <string name="performance_diagnostics_copied">诊断信息已复制</string>
     <string name="copy">复制</string>
 

@@ -53,6 +53,7 @@ if(NOT DEFINED LLAMA_INSTALL_VERSION)
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
+        diagnostic_log.cpp
         llama_jni.cpp
         omni_jni.cpp
         runtime_config.cpp)

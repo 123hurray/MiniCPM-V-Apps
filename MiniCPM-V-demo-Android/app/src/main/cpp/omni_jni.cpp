@@ -15,11 +15,12 @@
 
 #include "voxcpm2_runtime.h"
 #include "llama.h"
+#include "diagnostic_log.h"
 #include "runtime_config.h"
 
 #define TAG "omni_jni"
-#define LOG_I(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOG_E(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOG_I(...) do { __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__); diagnostic_log_printf(ANDROID_LOG_INFO, TAG, __VA_ARGS__); } while (0)
+#define LOG_E(...) do { __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__); diagnostic_log_printf(ANDROID_LOG_ERROR, TAG, __VA_ARGS__); } while (0)
 
 static VoxCPM2Runtime * g_runtime = nullptr;
 static std::string g_base_lm_path;

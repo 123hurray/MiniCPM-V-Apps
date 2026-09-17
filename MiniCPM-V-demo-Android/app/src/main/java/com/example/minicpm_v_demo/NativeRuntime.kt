@@ -1,13 +1,22 @@
 package com.example.minicpm_v_demo
 
 import android.app.Activity
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
+import android.content.ContentValues
 import android.content.Context
 import android.os.Build
+import android.os.Environment
 import android.os.PowerManager
 import android.os.Process
+import android.provider.MediaStore
 import android.util.Log
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executor
+import java.util.zip.ZipFile
 
 /**
  * Process-wide native runtime bootstrap and mobile performance policy.
@@ -20,6 +29,7 @@ object NativeRuntime {
     private const val TAG = "NativeRuntime"
     private const val PREFS = "native_runtime"
     private const val KEY_BACKEND = "backend"
+    private const val MAX_DIAGNOSTIC_LOG_BYTES = 4L * 1024L * 1024L
 
     enum class BackendMode(val storedValue: String, val nativeValue: Int) {
         AUTO("auto", 0),
@@ -34,6 +44,7 @@ object NativeRuntime {
     @Volatile private var thermalStatus = PowerManager.THERMAL_STATUS_NONE
     @Volatile private var configuredThreads = 4
     @Volatile private var selectedVariant = "baseline"
+    @Volatile private var diagnosticLogFile: File? = null
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
 
     private external fun nativeConfigureRuntime(
@@ -41,11 +52,18 @@ object NativeRuntime {
         performanceCpuIds: IntArray,
         backendMode: Int,
     )
+    private external fun nativeInitializeDiagnostics(logPath: String)
     private external fun nativeRuntimeDiagnostics(): String
 
     fun initialize(context: Context) {
         synchronized(lock) {
             if (!loaded) {
+                val diagnosticFile = prepareDiagnosticFile(context.applicationContext)
+                appendDiagnosticEvent(
+                    diagnosticFile,
+                    "process start sdk=${Build.VERSION.SDK_INT} soc=${deviceSocName()} " +
+                        "hardware=${Build.HARDWARE}",
+                )
                 val variant = CpuFeatures.bestGgmlCpuVariant()
                 selectedVariant = variant ?: "baseline"
                 try {
@@ -59,6 +77,7 @@ object NativeRuntime {
                         }
                     }
                     System.loadLibrary("minicpm_v_demo")
+                    nativeInitializeDiagnostics(diagnosticFile.absolutePath)
                     loaded = true
                 } catch (error: UnsatisfiedLinkError) {
                     loadError = error.message
@@ -85,21 +104,24 @@ object NativeRuntime {
         val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = preferences.getString(KEY_BACKEND, BackendMode.CPU.storedValue)
         val requested = BackendMode.entries.firstOrNull { it.storedValue == stored } ?: BackendMode.CPU
-        if (requested != BackendMode.CPU) {
-            Log.w(TAG, "Migrating unsafe backend preference ${requested.storedValue} to CPU")
+        if (requested == BackendMode.AUTO || requested == BackendMode.HEXAGON) {
+            Log.w(TAG, "Migrating unavailable backend preference ${requested.storedValue} to CPU")
             preferences.edit().putString(KEY_BACKEND, BackendMode.CPU.storedValue).apply()
+            return BackendMode.CPU
         }
-        return BackendMode.CPU
+        return requested
     }
 
     fun setBackendMode(context: Context, mode: BackendMode) {
-        if (mode != BackendMode.CPU) {
-            Log.w(TAG, "Backend ${mode.storedValue} is disabled in the stability build; using CPU")
-        }
+        val effective = if (mode == BackendMode.GPU) BackendMode.GPU else BackendMode.CPU
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_BACKEND, BackendMode.CPU.storedValue)
+            .putString(KEY_BACKEND, effective.storedValue)
             .apply()
+        appendDiagnosticEvent(
+            prepareDiagnosticFile(context.applicationContext),
+            "backend preference requested=${mode.storedValue} effective=${effective.storedValue}",
+        )
         if (loaded) configure(context.applicationContext)
     }
 
@@ -113,8 +135,7 @@ object NativeRuntime {
 
     fun diagnostics(context: Context): String {
         val profile = CpuFeatures.deviceProfile()
-        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-        val libraries = nativeDir.listFiles()?.map { it.name }?.toSet().orEmpty()
+        val libraries = packagedLibraries(context)
         val native = if (loaded) {
             runCatching { nativeRuntimeDiagnostics() }.getOrElse { "native error: ${it.message}" }
         } else {
@@ -131,6 +152,8 @@ object NativeRuntime {
             appendLine("Threads: $configuredThreads (thermal=${thermalName(thermalStatus)})")
             appendLine("Preference: ${backendMode(context).storedValue}")
             appendLine("Packaged backends: CPU=true, Vulkan=${"libggml-vulkan.so" in libraries}, OpenCL=${"libggml-opencl.so" in libraries}, Hexagon=${"libggml-hexagon.so" in libraries}")
+            appendLine("Diagnostic log: ${prepareDiagnosticFile(context).absolutePath}")
+            previousExitSummary(context)?.let { appendLine("Previous exit: $it") }
             append("Native: $native")
             loadError?.let { append("\nLoad error: $it") }
             TtsEngine.lastPerformanceSummary()?.let { append("\nLast TTS: $it") }
@@ -139,8 +162,63 @@ object NativeRuntime {
 
     fun shortSummary(context: Context): String {
         val profile = CpuFeatures.deviceProfile()
-        backendMode(context) // Migrates preferences saved by v3.6/v3.7.
-        return "CPU / ${profile.recommendedThreads}T"
+        val policy = if (backendMode(context) == BackendMode.GPU) "GPU-SAFE" else "CPU"
+        return "$policy / ${profile.recommendedThreads}T"
+    }
+
+    fun exportDiagnostics(context: Context): String {
+        val name = "minicpm-diagnostics-${
+            SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        }.txt"
+        val current = prepareDiagnosticFile(context.applicationContext)
+        val previous = File(current.parentFile, "runtime.previous.log")
+        val header = buildString {
+            appendLine("MiniCPM Android diagnostics")
+            appendLine("Exported: ${Date()}")
+            appendLine()
+            appendLine(diagnostics(context))
+            appendLine()
+            appendLine("===== runtime.previous.log =====")
+        }.toByteArray()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(
+                    MediaStore.Downloads.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_DOWNLOADS}/MiniCPMLogs",
+                )
+            }
+            val resolver = context.contentResolver
+            val uri = checkNotNull(
+                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values),
+            ) { "无法创建日志文件" }
+            try {
+                checkNotNull(resolver.openOutputStream(uri, "w")).use { output ->
+                    output.write(header)
+                    if (previous.isFile) previous.inputStream().use { it.copyTo(output) }
+                    output.write("\n===== runtime.log =====\n".toByteArray())
+                    if (current.isFile) current.inputStream().use { it.copyTo(output) }
+                }
+            } catch (error: Exception) {
+                resolver.delete(uri, null, null)
+                throw error
+            }
+            return "Download/MiniCPMLogs/$name"
+        }
+
+        val targetDirectory = checkNotNull(
+            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+        ) { "外部存储不可用" }
+        val target = File(targetDirectory, name)
+        target.outputStream().use { output ->
+            output.write(header)
+            if (previous.isFile) previous.inputStream().use { it.copyTo(output) }
+            output.write("\n===== runtime.log =====\n".toByteArray())
+            if (current.isFile) current.inputStream().use { it.copyTo(output) }
+        }
+        return target.absolutePath
     }
 
     private fun configure(context: Context) {
@@ -156,6 +234,79 @@ object NativeRuntime {
             profile.performanceCpuIds.toIntArray(),
             backendMode(context).nativeValue,
         )
+    }
+
+    private fun prepareDiagnosticFile(context: Context): File {
+        diagnosticLogFile?.let { return it }
+        val directory = File(checkNotNull(context.getExternalFilesDir(null)), "diagnostics")
+        directory.mkdirs()
+        val current = File(directory, "runtime.log")
+        if (current.length() > MAX_DIAGNOSTIC_LOG_BYTES) {
+            val previous = File(directory, "runtime.previous.log")
+            if (previous.exists()) previous.delete()
+            current.renameTo(previous)
+        }
+        diagnosticLogFile = current
+        return current
+    }
+
+    private fun packagedLibraries(context: Context): Set<String> {
+        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+        val result = nativeDir.listFiles()?.mapTo(mutableSetOf()) { it.name } ?: mutableSetOf()
+        val apkPaths = buildList {
+            add(context.applicationInfo.sourceDir)
+            context.applicationInfo.splitSourceDirs?.let(::addAll)
+        }
+        apkPaths.forEach { path ->
+            runCatching {
+                ZipFile(path).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement().name
+                        if (entry.startsWith("lib/arm64-v8a/") && entry.endsWith(".so")) {
+                            result += entry.substringAfterLast('/')
+                        }
+                    }
+                }
+            }.onFailure { Log.w(TAG, "Unable to inspect packaged libraries in $path", it) }
+        }
+        return result
+    }
+
+    private fun deviceSocName(): String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Build.SOC_MODEL
+    } else {
+        Build.HARDWARE
+    }
+
+    private fun appendDiagnosticEvent(file: File, message: String) {
+        runCatching {
+            file.appendText("[${System.currentTimeMillis()}] [K] NativeRuntime: $message\n")
+        }.onFailure { Log.w(TAG, "Unable to append diagnostic event", it) }
+    }
+
+    private fun previousExitSummary(context: Context): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return runCatching {
+            val activityManager = context.getSystemService(ActivityManager::class.java)
+            activityManager?.getHistoricalProcessExitReasons(null, 0, 5)
+                ?.firstOrNull()
+                ?.let { info ->
+                    "reason=${exitReasonName(info.reason)}(${info.reason}), status=${info.status}, " +
+                        "importance=${info.importance}, timestamp=${Date(info.timestamp)}, " +
+                        "description=${info.description ?: "-"}"
+                }
+        }.getOrNull()
+    }
+
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "crash"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
+        ApplicationExitInfo.REASON_ANR -> "anr"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "resource_usage"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "user_requested"
+        else -> "other"
     }
 
     private fun registerThermalListener(context: Context) {

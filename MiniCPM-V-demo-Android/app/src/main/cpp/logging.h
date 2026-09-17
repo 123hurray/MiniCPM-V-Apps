@@ -1,6 +1,7 @@
 #pragma once
 #include <android/log.h>
 #include <ggml.h>
+#include "diagnostic_log.h"
 
 #ifndef LOG_TAG
 #define LOG_TAG "minicpm-v"
@@ -37,9 +38,9 @@ static inline int minicpm_should_log(int prio) {
 #define LOGd(...) ((void)0)
 #endif
 
-#define LOGi(...)   do { if (minicpm_should_log(ANDROID_LOG_INFO )) __android_log_print(ANDROID_LOG_INFO , LOG_TAG, __VA_ARGS__); } while (0)
-#define LOGw(...)   do { if (minicpm_should_log(ANDROID_LOG_WARN )) __android_log_print(ANDROID_LOG_WARN , LOG_TAG, __VA_ARGS__); } while (0)
-#define LOGe(...)   do { if (minicpm_should_log(ANDROID_LOG_ERROR)) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); } while (0)
+#define LOGi(...)   do { if (minicpm_should_log(ANDROID_LOG_INFO )) __android_log_print(ANDROID_LOG_INFO , LOG_TAG, __VA_ARGS__); diagnostic_log_printf(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__); } while (0)
+#define LOGw(...)   do { if (minicpm_should_log(ANDROID_LOG_WARN )) __android_log_print(ANDROID_LOG_WARN , LOG_TAG, __VA_ARGS__); diagnostic_log_printf(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__); } while (0)
+#define LOGe(...)   do { if (minicpm_should_log(ANDROID_LOG_ERROR)) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); diagnostic_log_printf(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); } while (0)
 
 static inline int android_log_prio_from_ggml(enum ggml_log_level level) {
     switch (level) {
@@ -55,6 +56,6 @@ static inline void minicpm_android_log_callback(enum ggml_log_level level,
                                                 const char* text,
                                                 void* /*user*/) {
     const int prio = android_log_prio_from_ggml(level);
-    if (!minicpm_should_log(prio)) return;
-    __android_log_write(prio, LOG_TAG, text);
+    diagnostic_log_write(prio, LOG_TAG, text);
+    if (minicpm_should_log(prio)) __android_log_write(prio, LOG_TAG, text);
 }

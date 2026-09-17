@@ -6,10 +6,7 @@ plugins {
 
 val enableVulkan = providers.gradleProperty("MINICPMV_ENABLE_VULKAN")
     .map(String::toBoolean)
-    // Disabled in the distributed Android stability build. On SM8550 the
-    // vendor Vulkan path can abort the process before llama.cpp can return an
-    // error, so an in-process fallback is not sufficient.
-    .orElse(false)
+    .orElse(true)
 val openClSdkRoot = providers.environmentVariable("OPENCL_SDK_ROOT")
 val enableOpenCl = providers.gradleProperty("MINICPMV_ENABLE_OPENCL")
     .map(String::toBoolean)

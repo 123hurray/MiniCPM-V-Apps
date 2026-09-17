@@ -1,6 +1,8 @@
 #include <android/log.h>
 #include <jni.h>
 #include <algorithm>
+#include <cstdlib>
+#include <exception>
 #include <iomanip>
 #include <cmath>
 #include <string>
@@ -48,6 +50,28 @@ constexpr int   BATCH_SIZE              = 2048;
 // repetition_penalty=1.0). MiniCPM5's model card explicitly warns that
 // llama.cpp's min_p=0.05 default can trap the model in repetition loops.
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.7f;
+constexpr int   MOBILE_VULKAN_SAFE_LAYERS = 4;
+
+static void apply_adreno_vulkan_safety_policy() {
+    // Conservative settings for Qualcomm's Android Vulkan driver.  The GPU is
+    // still used for transformer layers, but risky async/fusion/extension
+    // paths are disabled and allocations are split into mobile-sized blocks.
+    setenv("GGML_VK_DISABLE_ASYNC", "1", 1);
+    setenv("GGML_VK_DISABLE_FUSION", "1", 1);
+    setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+    setenv("GGML_VK_DISABLE_COOPMAT2", "1", 1);
+    setenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR", "1", 1);
+    setenv("GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "1", 1);
+    setenv("GGML_VK_DISABLE_MULTI_ADD", "1", 1);
+    setenv("GGML_VK_ALLOW_GRAPHICS_QUEUE", "1", 1);
+    setenv("GGML_VK_PREFER_HOST_MEMORY", "1", 1);
+    setenv("GGML_VK_ALLOW_SYSMEM_FALLBACK", "1", 1);
+    setenv("GGML_VK_SUBALLOCATION_BLOCK_SIZE", "67108864", 1);
+    setenv("GGML_OP_OFFLOAD_MIN_BATCH", "64", 1);
+    LOGi("Adreno Vulkan safety policy enabled: layers=%d async=off fusion=off "
+         "coopmat=off int-dot=off suballoc=64MiB", MOBILE_VULKAN_SAFE_LAYERS);
+}
 
 static llama_model                      * g_model;
 static llama_context                    * g_context;
@@ -136,12 +160,15 @@ JNIEXPORT jint JNICALL
 Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
     runtime_apply_thread_policy();
-    // This Android stability build deliberately has no process-local GPU/NPU
-    // backend.  A vendor Vulkan abort terminates the process and cannot be
-    // recovered by the null-return retry below, so enforce CPU here as a
-    // second line of defence against stale preferences or direct JNI calls.
-    model_params.n_gpu_layers = 0;
-    LOGi("%s: Android stability policy: CPU backend", __func__);
+    const RuntimeBackendMode requested_mode = runtime_backend_mode();
+    if (requested_mode == RuntimeBackendMode::Gpu) {
+        apply_adreno_vulkan_safety_policy();
+        model_params.n_gpu_layers = MOBILE_VULKAN_SAFE_LAYERS;
+    } else {
+        model_params.n_gpu_layers = 0;
+    }
+    LOGi("%s: requested backend=%d, GPU layers=%d", __func__,
+         static_cast<int>(requested_mode), model_params.n_gpu_layers);
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGi("%s: Loading model from: \n%s\n", __func__, model_path);
@@ -157,11 +184,24 @@ Java_com_example_minicpm_1v_1demo_LlamaEngine_load(JNIEnv *env, jobject, jstring
     fclose(f);
     LOGi("%s: Model file size: %ld bytes (%.2f GB)", __func__, file_size, file_size / (1024.0 * 1024.0 * 1024.0));
 
-    auto *model = llama_model_load_from_file(model_path, model_params);
+    llama_model * model = nullptr;
+    try {
+        model = llama_model_load_from_file(model_path, model_params);
+    } catch (const std::exception & error) {
+        LOGe("%s: accelerator threw C++ exception: %s", __func__, error.what());
+    } catch (...) {
+        LOGe("%s: accelerator threw an unknown C++ exception", __func__);
+    }
     if (!model && model_params.n_gpu_layers != 0) {
         LOGw("%s: Accelerator model load failed; retrying on CPU", __func__);
         model_params.n_gpu_layers = 0;
-        model = llama_model_load_from_file(model_path, model_params);
+        try {
+            model = llama_model_load_from_file(model_path, model_params);
+        } catch (const std::exception & error) {
+            LOGe("%s: CPU fallback threw C++ exception: %s", __func__, error.what());
+        } catch (...) {
+            LOGe("%s: CPU fallback threw an unknown C++ exception", __func__);
+        }
     }
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {

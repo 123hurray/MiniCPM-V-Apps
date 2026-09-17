@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "ggml-backend.h"
+#include "diagnostic_log.h"
 
 namespace {
 constexpr const char * TAG = "NativeRuntime";
@@ -31,10 +32,13 @@ const char * mode_name(RuntimeBackendMode mode) {
 }
 
 void runtime_configure(int threads, const std::vector<int> & performance_cpus, RuntimeBackendMode mode) {
-    if (mode != RuntimeBackendMode::Cpu) {
+    if (mode == RuntimeBackendMode::Auto || mode == RuntimeBackendMode::Hexagon) {
         __android_log_print(ANDROID_LOG_WARN, TAG,
-                            "backend %s disabled by Android stability policy; forcing CPU",
+                            "backend %s has no safe device implementation; forcing CPU",
                             mode_name(mode));
+        diagnostic_log_printf(ANDROID_LOG_WARN, TAG,
+                              "backend %s has no safe device implementation; forcing CPU",
+                              mode_name(mode));
         mode = RuntimeBackendMode::Cpu;
     }
     {
@@ -46,6 +50,9 @@ void runtime_configure(int threads, const std::vector<int> & performance_cpus, R
     __android_log_print(ANDROID_LOG_INFO, TAG, "configured threads=%d mode=%s cpus=%zu",
                         runtime_thread_count(), mode_name(runtime_backend_mode()),
                         runtime_performance_cpus().size());
+    diagnostic_log_printf(ANDROID_LOG_INFO, TAG, "configured threads=%d mode=%s cpus=%zu",
+                          runtime_thread_count(), mode_name(runtime_backend_mode()),
+                          runtime_performance_cpus().size());
     // The affinity mask is inherited by worker threads subsequently created
     // by llama.cpp and ExecuTorch.
     runtime_apply_thread_policy();

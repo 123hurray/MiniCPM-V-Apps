@@ -599,12 +599,22 @@ class ModelManagerActivity : AppCompatActivity() {
     }
 
     private fun showPerformanceSettings() {
+        val modes = arrayOf(
+            NativeRuntime.BackendMode.CPU,
+            NativeRuntime.BackendMode.GPU,
+        )
+        val labels = arrayOf(
+            getString(R.string.performance_backend_cpu),
+            getString(R.string.performance_backend_gpu),
+        )
+        var selected = modes.indexOf(NativeRuntime.backendMode(this)).coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle(R.string.performance_settings)
-            .setMessage(R.string.performance_cpu_only_reason)
+            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                NativeRuntime.setBackendMode(this, NativeRuntime.BackendMode.CPU)
+                NativeRuntime.setBackendMode(this, modes[selected])
                 updatePerformanceDisplay()
+                Toast.makeText(this, R.string.performance_restart_hint, Toast.LENGTH_LONG).show()
             }
             .setNeutralButton(R.string.performance_diagnostics) { _, _ -> showPerformanceDiagnostics() }
             .show()
@@ -620,6 +630,23 @@ class ModelManagerActivity : AppCompatActivity() {
                 val clipboard = getSystemService(ClipboardManager::class.java)
                 clipboard?.setPrimaryClip(ClipData.newPlainText("MiniCPM diagnostics", report))
                 Toast.makeText(this, R.string.performance_diagnostics_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.export_log) { _, _ ->
+                runCatching { NativeRuntime.exportDiagnostics(this) }
+                    .onSuccess { path ->
+                        Toast.makeText(
+                            this,
+                            getString(R.string.performance_log_exported, path),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                    .onFailure { error ->
+                        Toast.makeText(
+                            this,
+                            getString(R.string.performance_log_export_failed, error.message),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
             }
             .show()
     }
