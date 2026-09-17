@@ -179,10 +179,10 @@
     <string name="agent_settings_saved">Agent 设置已保存：%1$d / %2$d</string>
     <string name="performance_settings">推理性能</string>
     <string name="performance_settings_description">后端、线程、温控与诊断</string>
-    <string name="performance_backend_auto">自动（加速器失败时回退 CPU）</string>
+    <string name="performance_backend_auto">自动（稳定优先，当前使用 CPU）</string>
     <string name="performance_backend_cpu">仅 CPU（最稳定）</string>
-    <string name="performance_backend_gpu">GPU / Vulkan（实验）</string>
-    <string name="performance_backend_hexagon">Hexagon NPU（需支持库）</string>
+    <string name="performance_backend_gpu">GPU / Vulkan（小模型仅卸载 4 层，实验）</string>
+    <string name="performance_backend_hexagon">Hexagon NPU（未打包，回退 CPU）</string>
     <string name="performance_diagnostics">性能诊断</string>
     <string name="performance_restart_hint">设置已保存，将在重新加载模型后生效</string>
     <string name="performance_diagnostics_copied">诊断信息已复制</string>

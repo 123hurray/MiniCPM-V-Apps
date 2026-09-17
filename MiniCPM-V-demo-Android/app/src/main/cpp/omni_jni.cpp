@@ -29,17 +29,6 @@ static bool g_accelerator_active = false;
 static bool g_fell_back_to_cpu = false;
 static double g_last_generation_ms = 0.0;
 
-static std::string preferred_device_for_mode(RuntimeBackendMode mode) {
-    switch (mode) {
-        case RuntimeBackendMode::Gpu: return "Vulkan0";
-        case RuntimeBackendMode::Hexagon: return "HTP0";
-        case RuntimeBackendMode::Auto:
-        case RuntimeBackendMode::Cpu:
-            return {};
-    }
-    return {};
-}
-
 static bool initRuntime(bool forceCpu) {
     if (!g_native_lib_dir.empty()) {
         ggml_backend_load_all_from_path(g_native_lib_dir.c_str());
@@ -49,9 +38,21 @@ static bool initRuntime(bool forceCpu) {
     runtime_apply_thread_policy();
 
     const RuntimeBackendMode mode = forceCpu ? RuntimeBackendMode::Cpu : runtime_backend_mode();
-    const bool useAccelerator = mode != RuntimeBackendMode::Cpu;
-    const int gpuLayers = useAccelerator ? -1 : 0;
-    const std::string preferred = preferred_device_for_mode(mode);
+    // VoxCPM2 is more than its llama BaseLM: the acoustic model and custom
+    // operators share one ggml backend.  Those graphs have not been validated
+    // against the Android Vulkan backend, and HTP/Hexagon is not packaged in
+    // this APK.  Previously every non-CPU selection called init_best(), which
+    // silently chose Vulkan and could abort inside the vendor driver.  Keep
+    // speech generation on the optimised ARMv8.6 CPU path until each graph has
+    // a tested accelerator implementation.
+    const bool acceleratorRequested = mode != RuntimeBackendMode::Cpu;
+    const bool useAccelerator = false;
+    const int gpuLayers = 0;
+    const std::string preferred;
+    if (acceleratorRequested) {
+        LOG_I("initRuntime: requested mode=%d is not safe for VoxCPM2; using CPU",
+              static_cast<int>(mode));
+    }
 
     auto * rt = new VoxCPM2Runtime();
     if (!rt->init(g_base_lm_path, g_acoustic_path, gpuLayers, useAccelerator,
@@ -62,7 +63,8 @@ static bool initRuntime(bool forceCpu) {
         return false;
     }
     g_runtime = rt;
-    g_accelerator_active = useAccelerator && rt->backend_name().find("CPU") == std::string::npos;
+    g_accelerator_active = false;
+    g_fell_back_to_cpu = acceleratorRequested;
     LOG_I("initRuntime: backend=%s threads=%d", rt->backend_name().c_str(), runtime_thread_count());
     return true;
 }

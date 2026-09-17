@@ -7,7 +7,6 @@ import android.os.PowerManager
 import android.os.Process
 import android.util.Log
 import java.io.File
-import java.util.Locale
 import java.util.concurrent.Executor
 
 /**
@@ -132,7 +131,13 @@ object NativeRuntime {
 
     fun shortSummary(context: Context): String {
         val profile = CpuFeatures.deviceProfile()
-        return "${backendMode(context).storedValue.uppercase(Locale.US)} / ${profile.recommendedThreads}T"
+        val policy = when (backendMode(context)) {
+            BackendMode.GPU -> "GPU-4L"
+            BackendMode.AUTO -> "AUTO→CPU"
+            BackendMode.HEXAGON -> "HEXAGON→CPU"
+            BackendMode.CPU -> "CPU"
+        }
+        return "$policy / ${profile.recommendedThreads}T"
     }
 
     private fun configure(context: Context) {

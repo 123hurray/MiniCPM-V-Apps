@@ -166,10 +166,10 @@
     <string name="agent_settings_saved">Agent settings saved: %1$d / %2$d</string>
     <string name="performance_settings">Inference Performance</string>
     <string name="performance_settings_description">Backend, threads, thermals and diagnostics</string>
-    <string name="performance_backend_auto">Auto (fall back to CPU on failure)</string>
+    <string name="performance_backend_auto">Auto (stable policy; CPU for now)</string>
     <string name="performance_backend_cpu">CPU only (most stable)</string>
-    <string name="performance_backend_gpu">GPU / Vulkan (experimental)</string>
-    <string name="performance_backend_hexagon">Hexagon NPU (support library required)</string>
+    <string name="performance_backend_gpu">GPU / Vulkan (4 layers on small models; experimental)</string>
+    <string name="performance_backend_hexagon">Hexagon NPU (not packaged; uses CPU)</string>
     <string name="performance_diagnostics">Performance diagnostics</string>
     <string name="performance_restart_hint">Saved; reload the model to apply</string>
     <string name="performance_diagnostics_copied">Diagnostics copied</string>
