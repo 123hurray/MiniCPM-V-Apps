@@ -57,6 +57,10 @@ static bool initRuntime(bool forceCpu) {
     }
 
     auto * rt = new VoxCPM2Runtime();
+    rt->set_progress_callback([](const char * stage, int current, int total) {
+        LOG_I("voxcpm2: stage=%s current=%d total=%d", stage ? stage : "unknown", current, total);
+        diagnostic_log_flush();
+    });
     if (!rt->init(g_base_lm_path, g_acoustic_path, gpuLayers, useAccelerator,
                   runtime_thread_count(), 4096, preferred)) {
         LOG_E("initRuntime: %s init failed: %s",
