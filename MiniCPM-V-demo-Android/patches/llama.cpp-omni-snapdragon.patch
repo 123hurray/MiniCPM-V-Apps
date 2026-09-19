@@ -61,7 +61,7 @@ index 99a33c0..5a307a5 100644
      /**
       * Prefill: feed a batch of embedding tokens into the model.
 diff --git a/tools/omni/voxcpm2/voxcpm2_runtime.cpp b/tools/omni/voxcpm2/voxcpm2_runtime.cpp
-index f9a10e0..d66b3e1 100644
+index f9a10e0..d653937 100644
 --- a/tools/omni/voxcpm2/voxcpm2_runtime.cpp
 +++ b/tools/omni/voxcpm2/voxcpm2_runtime.cpp
 @@ -1,6 +1,7 @@
@@ -111,6 +111,148 @@ index f9a10e0..d66b3e1 100644
          return fail("failed to initialize BaseLM");
      }
      if (!token_embeddings.load(base_lm_path)) {
+@@ -1314,48 +1327,106 @@ std::vector<float> VoxCPM2Runtime::decode_to_waveform(int target_sr) {
+         }
+     }
+ 
+-    GgmlContextGuard ctx_guard(kLargeGraphMem, true);
+-    ggml_context *   ctx = ctx_guard.get();
+-    if (!ctx) {
+-        fail("failed to create AudioVAE decode context");
+-        return {};
+-    }
++    const int output_sr = target_sr > 0 ? target_sr : audio_vae.config.output_sample_rate();
+ 
+-    ggml_tensor * latents_t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, total_frames, fdim);
+-    ggml_set_input(latents_t);
+-    ggml_tensor * waveform =
+-        audio_vae.decode(ctx, latents_t, target_sr > 0 ? target_sr : audio_vae.config.output_sample_rate());
++    // Keep acoustic generation continuous: output_pool contains one coherent
++    // latent sequence produced by a single prefill/decode state.  Only the
++    // memory-heavy AudioVAE graph is windowed.  AudioVAE is causal, so replaying
++    // a bounded amount of left context and trimming its samples reproduces the
++    // continuous decoder state without resetting voice identity or prosody.
++    constexpr int kDecodeCoreFrames    = 64;
++    constexpr int kDecodeContextFrames = 64;
++    const int     samples_per_frame    = audio_vae.config.decode_hop_length();
+ 
+-    ggml_cgraph * graph = ggml_new_graph_custom(ctx, kLargeGraphNodes, false);
+-    ggml_set_output(waveform);
+-    ggml_build_forward_expand(graph, waveform);
++    const auto decode_window = [&](int frame_begin, int frame_end) -> std::vector<float> {
++        const int window_frames = frame_end - frame_begin;
++        if (window_frames <= 0) {
++            return {};
++        }
+ 
+-    ggml_gallocr_t galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+-    if (!galloc) {
+-        fail("failed to create AudioVAE decode graph allocator");
+-        return {};
+-    }
+-    if (!ggml_gallocr_reserve(galloc, graph)) {
+-        ggml_gallocr_free(galloc);
+-        fail("failed to reserve AudioVAE decode graph memory");
+-        return {};
+-    }
+-    if (!ggml_gallocr_alloc_graph(galloc, graph)) {
+-        ggml_gallocr_free(galloc);
+-        fail("failed to allocate AudioVAE decode graph tensors");
+-        return {};
+-    }
++        std::vector<float> window_latents(static_cast<size_t>(window_frames) * static_cast<size_t>(fdim));
++        for (int c = 0; c < fdim; ++c) {
++            const float * source = latents.data() + static_cast<size_t>(c) * static_cast<size_t>(total_frames) +
++                                   static_cast<size_t>(frame_begin);
++            float * destination = window_latents.data() + static_cast<size_t>(c) * static_cast<size_t>(window_frames);
++            std::copy_n(source, static_cast<size_t>(window_frames), destination);
++        }
+ 
+-    ggml_backend_tensor_set(latents_t, latents.data(), 0, latents.size() * sizeof(float));
+-    audio_vae.prepare_decode_inputs();
+-    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
++        GgmlContextGuard ctx_guard(kLargeGraphMem, true);
++        ggml_context *   ctx = ctx_guard.get();
++        if (!ctx) {
++            fail("failed to create AudioVAE decode context");
++            return {};
++        }
++
++        ggml_tensor * latents_t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, window_frames, fdim);
++        ggml_set_input(latents_t);
++        ggml_tensor * waveform = audio_vae.decode(ctx, latents_t, output_sr);
++
++        ggml_cgraph * graph = ggml_new_graph_custom(ctx, kLargeGraphNodes, false);
++        ggml_set_output(waveform);
++        ggml_build_forward_expand(graph, waveform);
++
++        ggml_gallocr_t galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
++        if (!galloc) {
++            fail("failed to create AudioVAE decode graph allocator");
++            return {};
++        }
++        if (!ggml_gallocr_reserve(galloc, graph)) {
++            ggml_gallocr_free(galloc);
++            fail("failed to reserve AudioVAE decode graph memory");
++            return {};
++        }
++        if (!ggml_gallocr_alloc_graph(galloc, graph)) {
++            ggml_gallocr_free(galloc);
++            fail("failed to allocate AudioVAE decode graph tensors");
++            return {};
++        }
++
++        ggml_backend_tensor_set(latents_t, window_latents.data(), 0, window_latents.size() * sizeof(float));
++        audio_vae.prepare_decode_inputs();
++        if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
++            ggml_gallocr_free(galloc);
++            fail("AudioVAE decode graph compute failed");
++            return {};
++        }
++
++        auto decoded = tensor_to_vector(waveform);
+         ggml_gallocr_free(galloc);
+-        fail("AudioVAE decode graph compute failed");
+-        return {};
++        return decoded;
++    };
++
++    if (total_frames <= kDecodeCoreFrames + kDecodeContextFrames) {
++        return decode_window(0, total_frames);
+     }
+ 
+-    auto result = tensor_to_vector(waveform);
+-    ggml_gallocr_free(galloc);
++    std::vector<float> result;
++    result.reserve(static_cast<size_t>(total_frames) * static_cast<size_t>(samples_per_frame));
++    const int total_windows = (total_frames + kDecodeCoreFrames - 1) / kDecodeCoreFrames;
++    int       window_index  = 0;
++    for (int core_begin = 0; core_begin < total_frames; core_begin += kDecodeCoreFrames) {
++        ++window_index;
++        const int core_end    = std::min(total_frames, core_begin + kDecodeCoreFrames);
++        const int input_begin = std::max(0, core_begin - kDecodeContextFrames);
++        LOG_INF("VoxCPM2Runtime: AudioVAE window %d/%d frames=[%d,%d) core=[%d,%d)\n",
++                window_index, total_windows, input_begin, core_end, core_begin, core_end);
++
++        std::vector<float> decoded = decode_window(input_begin, core_end);
++        if (decoded.empty()) {
++            return {};
++        }
++
++        const size_t trim_samples = static_cast<size_t>(core_begin - input_begin) *
++                                    static_cast<size_t>(samples_per_frame);
++        const size_t keep_samples = static_cast<size_t>(core_end - core_begin) *
++                                    static_cast<size_t>(samples_per_frame);
++        if (decoded.size() < trim_samples + keep_samples) {
++            fail("AudioVAE window returned fewer samples than expected");
++            return {};
++        }
++        result.insert(result.end(), decoded.begin() + static_cast<std::ptrdiff_t>(trim_samples),
++                      decoded.begin() + static_cast<std::ptrdiff_t>(trim_samples + keep_samples));
++    }
+     return result;
+ }
+ 
 diff --git a/tools/omni/voxcpm2/voxcpm2_runtime.h b/tools/omni/voxcpm2/voxcpm2_runtime.h
 index 3e64178..2d9d87c 100644
 --- a/tools/omni/voxcpm2/voxcpm2_runtime.h
@@ -138,3 +280,4 @@ index 3e64178..2d9d87c 100644
    private:
      ggml_backend_t                                    backend             = nullptr;  // owned
      bool                                              is_initialized      = false;
+

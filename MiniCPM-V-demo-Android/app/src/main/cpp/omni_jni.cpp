@@ -10,6 +10,7 @@
 #include <android/log.h>
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -221,15 +222,32 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     const auto started = std::chrono::steady_clock::now();
     runtime_apply_thread_policy();
 
+    int referenceSampleRate = 0;
     if (!refPath.empty()) {
-        // Voice cloning mode
-        if (!readWavF32(refPath, refPcm, nullptr)) {
+        if (!readWavF32(refPath, refPcm, &referenceSampleRate)) {
             LOG_E("nativeTtsGenerate: failed to read reference WAV");
+            diagnostic_log_flush();
             return JNI_FALSE;
         }
-        waveform = g_runtime->generate_with_clone(txt, refPcm, params);
-    } else {
-        waveform = g_runtime->generate(txt, params);
+        params.reference_sample_rate = referenceSampleRate;
+    }
+
+    LOG_I("nativeTtsGenerate: continuous generation begin bytes=%zu clone=%s cfg=%.2f timesteps=%d",
+          txt.size(), refPath.empty() ? "false" : "true", cfgValue, timesteps);
+    diagnostic_log_flush();
+
+    try {
+        waveform = refPath.empty()
+            ? g_runtime->generate(txt, params)
+            : g_runtime->generate_with_clone(txt, refPcm, params);
+    } catch (const std::exception & e) {
+        LOG_E("nativeTtsGenerate: C++ exception: %s", e.what());
+        diagnostic_log_flush();
+        return JNI_FALSE;
+    } catch (...) {
+        LOG_E("nativeTtsGenerate: unknown C++ exception");
+        diagnostic_log_flush();
+        return JNI_FALSE;
     }
 
     if (waveform.empty() && g_accelerator_active) {
@@ -249,6 +267,7 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     if (waveform.empty()) {
         LOG_E("nativeTtsGenerate: generation produced empty waveform: %s",
               g_runtime ? g_runtime->last_error().c_str() : "runtime unavailable");
+        diagnostic_log_flush();
         return JNI_FALSE;
     }
 
@@ -258,11 +277,13 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     int sr = g_runtime->sample_rate();
     if (!writeWavI16(outPath, waveform, sr)) {
         LOG_E("nativeTtsGenerate: failed to write output WAV");
+        diagnostic_log_flush();
         return JNI_FALSE;
     }
 
     LOG_I("nativeTtsGenerate: success, %zu samples @ %d Hz -> %s",
           waveform.size(), sr, outPath.c_str());
+    diagnostic_log_flush();
     return JNI_TRUE;
 }
 
