@@ -33,8 +33,8 @@ android {
         // This sets Android 8.0 (Oreo) as the minimum supported release.
         minSdk = 28
         targetSdk = 36
-        versionCode = 34
-        versionName = "3.12"
+        versionCode = 35
+        versionName = "3.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -139,7 +139,7 @@ android {
 
 chaquopy {
     defaultConfig {
-        version = "3.12"
+        version = "3.13"
     }
 }
 

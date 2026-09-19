@@ -56,25 +56,25 @@ jobs:
       - name: Prepare signing inputs
         run: |
           cp MiniCPM-V-demo-Android/app/build/outputs/apk/release/app-release-unsigned.apk \
-            MiniCPM-V-demo-Android-v3.12-unsigned.apk
+            MiniCPM-V-demo-Android-v3.13-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
 
       - name: Verify APK metadata
         run: |
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
-          "$AAPT" dump badging MiniCPM-V-demo-Android-v3.12-unsigned.apk | tee /tmp/apk-badging.txt
-          grep -F "package: name='com.example.minicpm_v_demo' versionCode='34' versionName='3.12'" \
+          "$AAPT" dump badging MiniCPM-V-demo-Android-v3.13-unsigned.apk | tee /tmp/apk-badging.txt
+          grep -F "package: name='com.example.minicpm_v_demo' versionCode='35' versionName='3.13'" \
             /tmp/apk-badging.txt
-          unzip -t MiniCPM-V-demo-Android-v3.12-unsigned.apk
-          sha256sum MiniCPM-V-demo-Android-v3.12-unsigned.apk > SHA256SUMS
-          tar -czf MiniCPM-V-demo-Android-v3.12-signing-inputs.tar.gz \
-            MiniCPM-V-demo-Android-v3.12-unsigned.apk apksigner.jar SHA256SUMS
+          unzip -t MiniCPM-V-demo-Android-v3.13-unsigned.apk
+          sha256sum MiniCPM-V-demo-Android-v3.13-unsigned.apk > SHA256SUMS
+          tar -czf MiniCPM-V-demo-Android-v3.13-signing-inputs.tar.gz \
+            MiniCPM-V-demo-Android-v3.13-unsigned.apk apksigner.jar SHA256SUMS
 
       - name: Upload unsigned APK and signer
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCPM-V-demo-Android-v3.12-signing-inputs
+          name: MiniCPM-V-demo-Android-v3.13-signing-inputs
           path: |
-            MiniCPM-V-demo-Android-v3.12-signing-inputs.tar.gz
+            MiniCPM-V-demo-Android-v3.13-signing-inputs.tar.gz
           if-no-files-found: error
           retention-days: 30
