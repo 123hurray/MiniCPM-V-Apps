@@ -10,10 +10,7 @@
 #include <android/log.h>
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
-#include <exception>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "voxcpm2_runtime.h"
@@ -32,146 +29,6 @@ static std::string g_native_lib_dir;
 static bool g_accelerator_active = false;
 static bool g_fell_back_to_cpu = false;
 static double g_last_generation_ms = 0.0;
-
-namespace {
-
-// The AudioVAE decoder builds a graph for every generated latent patch at once.
-// On phones, long CJK input can therefore produce a very large transient graph
-// (VoxCPM2 uses roughly text_tokens * 3 + 15 acoustic steps). Keep each graph
-// bounded and join the resulting PCM instead of risking a native OOM/abort.
-constexpr size_t kMaxTtsChunkCodepoints = 12;
-constexpr int    kMaxTtsChunkSteps      = 64;
-constexpr int    kInterChunkSilenceMs   = 35;
-constexpr int    kChunkFadeMs           = 5;
-
-struct Utf8Unit {
-    size_t   begin;
-    size_t   end;
-    uint32_t codepoint;
-};
-
-static std::vector<Utf8Unit> utf8Units(const std::string & text) {
-    std::vector<Utf8Unit> result;
-    result.reserve(text.size());
-    size_t i = 0;
-    while (i < text.size()) {
-        const size_t begin = i;
-        const auto lead = static_cast<uint8_t>(text[i]);
-        uint32_t cp = lead;
-        size_t width = 1;
-        if ((lead & 0xE0u) == 0xC0u) {
-            cp = lead & 0x1Fu;
-            width = 2;
-        } else if ((lead & 0xF0u) == 0xE0u) {
-            cp = lead & 0x0Fu;
-            width = 3;
-        } else if ((lead & 0xF8u) == 0xF0u) {
-            cp = lead & 0x07u;
-            width = 4;
-        }
-
-        if (i + width > text.size()) {
-            width = 1;
-            cp = lead;
-        } else if (width > 1) {
-            bool valid = true;
-            for (size_t j = 1; j < width; ++j) {
-                const auto continuation = static_cast<uint8_t>(text[i + j]);
-                if ((continuation & 0xC0u) != 0x80u) {
-                    valid = false;
-                    break;
-                }
-                cp = (cp << 6u) | (continuation & 0x3Fu);
-            }
-            if (!valid) {
-                width = 1;
-                cp = lead;
-            }
-        }
-        i += width;
-        result.push_back({begin, i, cp});
-    }
-    return result;
-}
-
-static bool isBreakCodepoint(uint32_t cp) {
-    switch (cp) {
-        case ' ': case '\t': case '\n': case '\r':
-        case ',': case '.': case '!': case '?': case ';': case ':':
-        case 0x3000: // ideographic space
-        case 0x3001: // 、
-        case 0x3002: // 。
-        case 0xFF01: // ！
-        case 0xFF0C: // ，
-        case 0xFF1A: // ：
-        case 0xFF1B: // ；
-        case 0xFF1F: // ？
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool isWhitespaceCodepoint(uint32_t cp) {
-    return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == 0x3000;
-}
-
-static std::vector<std::string> splitTtsText(const std::string & text) {
-    const std::vector<Utf8Unit> units = utf8Units(text);
-    std::vector<std::string> chunks;
-    size_t cursor = 0;
-    while (cursor < units.size()) {
-        while (cursor < units.size() && isWhitespaceCodepoint(units[cursor].codepoint)) {
-            ++cursor;
-        }
-        if (cursor >= units.size()) break;
-
-        size_t end = std::min(units.size(), cursor + kMaxTtsChunkCodepoints);
-        if (end < units.size()) {
-            // Prefer a natural boundary in the latter half of the chunk, while
-            // still enforcing the hard memory bound.
-            const size_t earliest = cursor + kMaxTtsChunkCodepoints / 2;
-            for (size_t candidate = end; candidate > earliest; --candidate) {
-                if (isBreakCodepoint(units[candidate - 1].codepoint)) {
-                    end = candidate;
-                    break;
-                }
-            }
-        }
-
-        size_t trimmedEnd = end;
-        while (trimmedEnd > cursor && isWhitespaceCodepoint(units[trimmedEnd - 1].codepoint)) {
-            --trimmedEnd;
-        }
-        if (trimmedEnd > cursor) {
-            chunks.emplace_back(text.substr(units[cursor].begin,
-                                            units[trimmedEnd - 1].end - units[cursor].begin));
-        }
-        cursor = end;
-    }
-    return chunks;
-}
-
-static void appendPcmChunk(std::vector<float> & output,
-                           std::vector<float> chunk,
-                           int sampleRate) {
-    if (chunk.empty()) return;
-    const size_t fadeSamples = std::min(chunk.size() / 2,
-        static_cast<size_t>(std::max(0, sampleRate * kChunkFadeMs / 1000)));
-    for (size_t i = 0; i < fadeSamples; ++i) {
-        const float gain = static_cast<float>(i + 1) / static_cast<float>(fadeSamples + 1);
-        chunk[i] *= gain;
-        chunk[chunk.size() - 1 - i] *= gain;
-    }
-    if (!output.empty()) {
-        output.insert(output.end(),
-                      static_cast<size_t>(std::max(0, sampleRate * kInterChunkSilenceMs / 1000)),
-                      0.0f);
-    }
-    output.insert(output.end(), chunk.begin(), chunk.end());
-}
-
-} // namespace
 
 static bool initRuntime(bool forceCpu) {
     if (!g_native_lib_dir.empty()) {
@@ -357,87 +214,55 @@ Java_com_example_minicpm_1v_1demo_TtsEngine_nativeTtsGenerate(
     VoxCPM2GenerateParams params;
     params.cfg_value           = cfgValue;
     params.inference_timesteps = timesteps;
-    params.max_steps           = kMaxTtsChunkSteps;
+    params.max_steps           = 200;
 
     std::vector<float> waveform;
     std::vector<float> refPcm;
     const auto started = std::chrono::steady_clock::now();
     runtime_apply_thread_policy();
 
-    if (txt.empty()) {
-        LOG_E("nativeTtsGenerate: text is empty");
-        diagnostic_log_flush();
-        return JNI_FALSE;
-    }
-
-    int referenceSampleRate = 0;
-    if (!refPath.empty() && !readWavF32(refPath, refPcm, &referenceSampleRate)) {
-        LOG_E("nativeTtsGenerate: failed to read reference WAV");
-        diagnostic_log_flush();
-        return JNI_FALSE;
-    }
-    if (referenceSampleRate > 0) {
-        params.reference_sample_rate = referenceSampleRate;
-    }
-
-    const std::vector<std::string> chunks = splitTtsText(txt);
-    const int sr = g_runtime->sample_rate();
-    LOG_I("nativeTtsGenerate: begin bytes=%zu chunks=%zu maxCodepoints=%zu maxSteps=%d clone=%s",
-          txt.size(), chunks.size(), kMaxTtsChunkCodepoints, kMaxTtsChunkSteps,
-          refPath.empty() ? "false" : "true");
-    diagnostic_log_flush();
-
-    try {
-        for (size_t i = 0; i < chunks.size(); ++i) {
-            LOG_I("nativeTtsGenerate: chunk %zu/%zu begin bytes=%zu",
-                  i + 1, chunks.size(), chunks[i].size());
-            diagnostic_log_flush();
-
-            std::vector<float> chunkWaveform = refPath.empty()
-                ? g_runtime->generate(chunks[i], params)
-                : g_runtime->generate_with_clone(chunks[i], refPcm, params);
-
-            if (chunkWaveform.empty()) {
-                LOG_E("nativeTtsGenerate: chunk %zu/%zu failed: %s",
-                      i + 1, chunks.size(), g_runtime->last_error().c_str());
-                diagnostic_log_flush();
-                waveform.clear();
-                break;
-            }
-            LOG_I("nativeTtsGenerate: chunk %zu/%zu complete samples=%zu",
-                  i + 1, chunks.size(), chunkWaveform.size());
-            appendPcmChunk(waveform, std::move(chunkWaveform), sr);
-            diagnostic_log_flush();
+    if (!refPath.empty()) {
+        // Voice cloning mode
+        if (!readWavF32(refPath, refPcm, nullptr)) {
+            LOG_E("nativeTtsGenerate: failed to read reference WAV");
+            return JNI_FALSE;
         }
-    } catch (const std::exception & e) {
-        LOG_E("nativeTtsGenerate: C++ exception: %s", e.what());
-        diagnostic_log_flush();
-        waveform.clear();
-    } catch (...) {
-        LOG_E("nativeTtsGenerate: unknown C++ exception");
-        diagnostic_log_flush();
-        waveform.clear();
+        waveform = g_runtime->generate_with_clone(txt, refPcm, params);
+    } else {
+        waveform = g_runtime->generate(txt, params);
+    }
+
+    if (waveform.empty() && g_accelerator_active) {
+        LOG_E("nativeTtsGenerate: accelerator failed (%s); retrying once on CPU",
+              g_runtime->last_error().c_str());
+        g_runtime->free();
+        delete g_runtime;
+        g_runtime = nullptr;
+        if (initRuntime(true)) {
+            g_fell_back_to_cpu = true;
+            waveform = refPath.empty()
+                ? g_runtime->generate(txt, params)
+                : g_runtime->generate_with_clone(txt, refPcm, params);
+        }
     }
 
     if (waveform.empty()) {
         LOG_E("nativeTtsGenerate: generation produced empty waveform: %s",
               g_runtime ? g_runtime->last_error().c_str() : "runtime unavailable");
-        diagnostic_log_flush();
         return JNI_FALSE;
     }
 
     g_last_generation_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - started).count();
 
+    int sr = g_runtime->sample_rate();
     if (!writeWavI16(outPath, waveform, sr)) {
         LOG_E("nativeTtsGenerate: failed to write output WAV");
-        diagnostic_log_flush();
         return JNI_FALSE;
     }
 
     LOG_I("nativeTtsGenerate: success, %zu samples @ %d Hz -> %s",
           waveform.size(), sr, outPath.c_str());
-    diagnostic_log_flush();
     return JNI_TRUE;
 }
 
