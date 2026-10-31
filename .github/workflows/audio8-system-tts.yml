@@ -59,13 +59,13 @@ jobs:
           grep -F 'lto=thin' out/native-optimization-config.txt
           grep -m 1 -- '-flto=thin' "$native_dir/build.ninja" >> out/native-optimization-config.txt
           grep -m 1 -- '-O3' "$native_dir/build.ninja" >> out/native-optimization-config.txt
-          cp Audio8-Android/app/build/outputs/apk/release/app-release-unsigned.apk out/Audio8-Android-v4.5-unsigned.apk
+          cp Audio8-Android/app/build/outputs/apk/release/app-release-unsigned.apk out/Audio8-Android-v4.6-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" out/
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging out/Audio8-Android-v4.5-unsigned.apk | tee out/apk-metadata.txt
-          grep -F "name='com.example.audio8tts' versionCode='41' versionName='4.5'" out/apk-metadata.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging out/Audio8-Android-v4.6-unsigned.apk | tee out/apk-metadata.txt
+          grep -F "name='com.example.audio8tts' versionCode='42' versionName='4.6'" out/apk-metadata.txt
           java scripts/TestTtsManifest.java Audio8-Android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree out/Audio8-Android-v4.5-unsigned.apk AndroidManifest.xml > out/manifest-tree.txt
-          unzip -l out/Audio8-Android-v4.5-unsigned.apk | tee out/apk-files.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree out/Audio8-Android-v4.6-unsigned.apk AndroidManifest.xml > out/manifest-tree.txt
+          unzip -l out/Audio8-Android-v4.6-unsigned.apk | tee out/apk-files.txt
           grep -F 'lib/arm64-v8a/libonnxruntime_providers_qnn.so' out/apk-files.txt
           grep -F 'lib/arm64-v8a/libQnnHtpV73Skel.so' out/apk-files.txt
           grep -F 'lib/arm64-v8a/libQnnHtpPrepare.so' out/apk-files.txt
@@ -87,15 +87,15 @@ jobs:
           fi
           trap 'rm -f "$RUNNER_TEMP/audio8-signing.jks"' EXIT
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/audio8-signing.jks"
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -f 4 out/Audio8-Android-v4.5-unsigned.apk "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/audio8-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out out/MiniCPM-V-demo-Android-v4.5.apk "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs out/MiniCPM-V-demo-Android-v4.5.apk | tee out/signing-certificate.txt
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -f 4 out/Audio8-Android-v4.6-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/audio8-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out out/MiniCPM-V-demo-Android-v4.6.apk "$RUNNER_TEMP/aligned.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs out/MiniCPM-V-demo-Android-v4.6.apk | tee out/signing-certificate.txt
           grep -F '42bf8536d97d3a3e6ccb42252a91cd471296045c6455eb7d55d202bb868a8905' out/signing-certificate.txt
       - name: Checksums
         run: cd out && sha256sum *.apk > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: Audio8-Android-v4.5
+          name: Audio8-Android-v4.6
           path: out/
           if-no-files-found: error
           retention-days: 30

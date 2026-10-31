@@ -1,6 +1,8 @@
 """Source/contract checks only: never load ORT or QNN on the build host."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -8,6 +10,19 @@ CPP=ROOT/'Audio8-Android/app/src/main/cpp'
 JAVA=ROOT/'Audio8-Android/app/src/main/java/com/example/audio8tts'
 
 class AndroidBridgeTests(unittest.TestCase):
+    def test_native_output_contract_and_registration_lifetime(self):
+        with tempfile.TemporaryDirectory(prefix='audio8-contract-') as directory:
+            executable=str(Path(directory)/'contract-test')
+            subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-I',str(CPP),
+                str(ROOT/'scripts/native-test/onnx_contract_test.cpp'),'-o',executable],check=True)
+            subprocess.run([executable],check=True)
+        source=(CPP/'onnx_ar.cpp').read_text()
+        self.assertIn('float_data(outputs[0],4097)',source)
+        self.assertIn('half_data(outputs[1],896)',source)
+        self.assertNotIn('(steps-1)*4097',source)
+        self.assertIn('update_cache(slow_cache,outputs,2,steps,position,2048)',source)
+        self.assertLess(source.index('Ort::Env env{nullptr}'),source.index('ProviderRegistration<Ort::Env>'))
+        self.assertLess(source.index('ProviderRegistration<Ort::Env>'),source.index('std::unique_ptr<State>'))
     def test_bounded_requests_and_no_automatic_warmup(self):
         service=(JAVA/'Audio8Service.java').read_text()
         self.assertNotIn('warmup_begin',service)
@@ -27,7 +42,7 @@ class AndroidBridgeTests(unittest.TestCase):
     def test_npu_placement_and_fail_closed(self):
         source=(CPP/'onnx_ar.cpp').read_text()
         self.assertLess(source.index('require_offline_synthesis_process();'),source.index('env=Ort::Env'))
-        self.assertLess(source.index('env.DisableTelemetryEvents();'),source.index('env.RegisterExecutionProviderLibrary'))
+        self.assertLess(source.index('env.DisableTelemetryEvents();'),source.index('registration.acquire'))
         self.assertIn('"session.disable_cpu_ep_fallback","1"',source)
         self.assertIn('OrtHardwareDeviceType_NPU',source)
         self.assertNotIn('enable_htp_prepare_only',source)

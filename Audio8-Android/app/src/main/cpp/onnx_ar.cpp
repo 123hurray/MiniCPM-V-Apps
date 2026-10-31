@@ -1,6 +1,8 @@
 #include "onnx_ar.h"
 #include "network_guard.h"
 #include "runtime_status.h"
+#include "onnx_contract.h"
+#include "provider_registration.h"
 #include <onnxruntime_cxx_api.h>
 #include <algorithm>
 #include <array>
@@ -60,6 +62,7 @@ const float * float_data(const Ort::Value & value,size_t count) {
 
 struct OnnxAr::Impl {
     Ort::Env env{nullptr};
+    ProviderRegistration<Ort::Env> registration{env};
     std::unique_ptr<State> prefill,slow,fast;
     std::vector<Ort::ConstEpDevice> devices;
     std::vector<std::vector<Half>> slow_cache,fast_cache;
@@ -78,7 +81,7 @@ struct OnnxAr::Impl {
         env=Ort::Env(ORT_LOGGING_LEVEL_WARNING,"audio8-offline");
         env.DisableTelemetryEvents();
         audio8_stage("注册 QNN 后端");
-        env.RegisterExecutionProviderLibrary("QNNExecutionProvider",libraries+"/libonnxruntime_providers_qnn.so");
+        registration.acquire("QNNExecutionProvider",libraries+"/libonnxruntime_providers_qnn.so");
         audio8_stage("查找 NPU 设备");
         for(auto device:env.GetEpDevices())
             if(std::string(device.EpName())=="QNNExecutionProvider" && device.Device().Type()==OrtHardwareDeviceType_NPU) devices.push_back(device);
@@ -123,7 +126,6 @@ struct OnnxAr::Impl {
     }
     ~Impl() {
         fast.reset();slow.reset();prefill.reset();
-        try { env.UnregisterExecutionProviderLibrary("QNNExecutionProvider"); } catch(...) { }
     }
     void update_cache(std::vector<std::vector<Half>> & cache,const std::vector<Ort::Value> & outputs,
                       size_t offset,int64_t steps,int64_t position,int64_t capacity) {
@@ -160,14 +162,13 @@ struct OnnxAr::Impl {
             feeds.add("input_pos",positions.data(),positions.size(),{steps});
             add_cache(feeds,slow_cache,24,2048);
             auto outputs=feeds.run(phase==0?*prefill:*slow);
-            auto shape=outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-            if(shape.size()!=3 || shape[0]!=1 || shape[1]!=steps || shape[2]!=4097)
-                throw std::runtime_error("Audio8 slow semantic logits layout mismatch");
-            const float * values=float_data(outputs[0],static_cast<size_t>(steps*4097))+(steps-1)*4097;
+            require_last_token_output(outputs[0].GetTensorTypeAndShapeInfo().GetShape(),4097,"slow logits");
+            require_last_token_output(outputs[1].GetTensorTypeAndShapeInfo().GetShape(),896,"slow hidden");
+            const float * values=float_data(outputs[0],4097);
             std::fill_n(logits,static_cast<size_t>(logits_count),-std::numeric_limits<float>::infinity());
             for(int i=0;i<4096;++i) logits[151678+i]=values[i];
             logits[151645]=values[4096];
-            const Half * h=half_data(outputs[1],static_cast<size_t>(steps*896))+(steps-1)*896;
+            const Half * h=half_data(outputs[1],896);
             for(int i=0;i<896;++i) hidden_out[i]=h[i].ToFloat();
             update_cache(slow_cache,outputs,2,steps,position,2048);
             if(phase==0) prefill_ms=elapsed(start); else { slow_ms+=elapsed(start);++slow_calls; }

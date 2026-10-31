@@ -1,5 +1,20 @@
 # Audio8 Android system TTS
 
+## Version 4.6 — pinned prefill output contract and QNN exception cleanup
+
+The pinned slow graph emits only the last position: FP32 logits `[1,1,4097]`
+and FP16 hidden `[1,1,896]`, even for a multi-token CPU prefill. Read these
+outputs without a prompt-length offset; retain full prompt-length KV updates.
+Unexpected shapes still fail with actual and expected dimensions in diagnostics.
+QNN registration is now an owned RAII member: both normal teardown and a failed
+constructor release sessions before unregistering the provider, then release Env.
+Failed registration never unregisters somebody else's provider. Native tests
+exercise the shape contract, rejected layouts, teardown order and repeated retries
+with fake provider/session objects, without executing ORT/QNN on the build host.
+Models, model hashes, compiled-cache paths and signing certificate are unchanged.
+The user's v4.5 log confirms HTP initialization/compilation, not successful NPU
+token generation, audible output, numerical parity or a speed improvement.
+
 ## Version 4.5 — bounded requests and concise status
 
 Automatic voice-selection warmup has been removed, including for old preferences.

@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 4.5"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 4.6"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Realistic-0.6B · SoC="+Build.SOC_MODEL+"\nCPU 基础模型约 1.43 GB，已有文件保留。NPU 另下载约 0.9 GB 模型，请预留至少 5 GB 空间。模型不在 APK 中。\nNPU 实验路径：主干解码 HTP INT4；预填充、codec 保留 CPU。Fast AR 可选 CPU INT4 / NPU。不是全模型 NPU。\n首次 NPU 编译可能需要数分钟，后续复用缓存。无法启动时会报错，不会静默改用 CPU。推理进程禁止新建互联网 socket；下载由独立界面进程完成。\n仍整段生成后播放，不随机拆段；停止在 AR 步间生效，不能中断单次加载或 codec 计算。语速和音调建议默认。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -184,7 +184,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.5 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.6 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }
