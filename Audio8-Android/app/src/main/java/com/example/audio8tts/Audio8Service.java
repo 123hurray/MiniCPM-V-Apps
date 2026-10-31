@@ -93,7 +93,7 @@ public final class Audio8Service extends TextToSpeechService {
                     android.os.Process.killProcess(android.os.Process.myPid());
                 }
             },15,TimeUnit.SECONDS);
-        }
+        } else RuntimeStatus.write(this,"已停止");
     }
     @Override protected void onSynthesizeText(SynthesisRequest request,SynthesisCallback callback) {
         long ticket=generation.incrementAndGet(), start=SystemClock.elapsedRealtime();
@@ -147,11 +147,11 @@ public final class Audio8Service extends TextToSpeechService {
                 if (!sink.cancelled() && complete[0]) {
                     if (hit==null && collect[0]) cache.put(key,collected.toByteArray());
                     callback.done(); RuntimeStatus.write(this,"合成已完成");ModelStore.log(this,"synthesis_done total_ms="+(SystemClock.elapsedRealtime()-start));
-                } else ModelStore.log(this,"synthesis_stopped total_ms="+(SystemClock.elapsedRealtime()-start));
+                } else { RuntimeStatus.write(this,"已停止");ModelStore.log(this,"synthesis_stopped total_ms="+(SystemClock.elapsedRealtime()-start)); }
                 releaseIfTrimRequested();
             } catch (Throwable e) {
                 disarmWatchdog();
-                if (destroyed || ticket!=generation.get()) { ModelStore.log(this,"synthesis_cancelled ms="+(SystemClock.elapsedRealtime()-start)); return; }
+                if (destroyed || ticket!=generation.get()) { RuntimeStatus.write(this,"已停止");ModelStore.log(this,"synthesis_cancelled ms="+(SystemClock.elapsedRealtime()-start)); return; }
                 ModelStore.log(this,"synthesis_error "+android.util.Log.getStackTraceString(e));
                 RuntimeStatus.write(this,"合成失败："+e.getMessage());
                 callback.error(TextToSpeech.ERROR_SYNTHESIS);

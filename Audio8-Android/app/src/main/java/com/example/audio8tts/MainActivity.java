@@ -149,6 +149,8 @@ public final class MainActivity extends Activity {
         scroll.removeView(root);scroll.addView(home);home.addView(title);
         TextView models=new TextView(this);home.addView(models);
         TextView phase=new TextView(this);phase.setTextSize(18);phase.setPadding(0,24,0,24);home.addView(phase);
+        phase.setMaxLines(3);phase.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);
         home.addView(status);home.addView(text);home.addView(preview);home.addView(stop);
         button(home,"引擎无响应？重启语音进程",() -> {
             sendBroadcast(new Intent(this,EngineControlReceiver.class));

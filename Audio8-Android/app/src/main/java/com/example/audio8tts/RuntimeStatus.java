@@ -12,7 +12,8 @@ final class RuntimeStatus {
             String[] parts=ModelStore.text(new File(ModelStore.dir(c),name)).split("\n",2);
             long age=Math.max(0,(System.currentTimeMillis()-Long.parseLong(parts[0]))/1000);
             String phase=parts[1];
-            if(phase.contains("完成") || phase.contains("失败") || phase.contains("超时") || phase.contains("已结束") || phase.contains("已重启") || phase.equals("模型就绪")) return phase;
+            if(phase.contains("完成") || phase.contains("失败") || phase.contains("超时") || phase.contains("已停止") || phase.contains("已结束") || phase.contains("已重启") || phase.equals("模型就绪")) return phase;
+            if(age>900)return "上次状态："+phase+"（请重新试听）";
             return phase+" · 已用 "+age+" 秒";
         } catch(Exception ignored) { return "尚未开始，点击试听"; }
     }
