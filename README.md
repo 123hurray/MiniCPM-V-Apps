@@ -1,5 +1,10 @@
 # Audio8 Android system TTS
 
+Version 4.2 fixes engine discovery: the TTS service filter now declares
+`android.intent.category.DEFAULT`, required by Android TtsEngines' use of
+`PackageManager.MATCH_DEFAULT_ONLY`. Source and merged manifests are checked in CI.
+The app also includes a package-manager discovery check for on-device diagnosis.
+
 Version 4.1 adds an editable HTTPS Hugging Face mirror origin, defaulting to
 `https://hf-mirror.com`, with an official-direct shortcut. Both download the identical
 pinned model path and must pass the same SHA-256 check. Switching endpoints keeps

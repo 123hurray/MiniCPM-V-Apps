@@ -25,7 +25,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.1"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.2"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Realistic-0.6B · 本地 CPU / ARM64\n首次下载约 1.43 GB，至少预留 3 GB 存储。无需 root。下载后可在系统文字转语音设置中选择本引擎。\n实验版：每次请求整段合成后播放，不是低延迟帧流式；单次最多 500 字，不截断、不随机拆段。停止立即丢弃播放，当前原生计算完成后才能处理下一条。\n建议系统语速和音调保持默认；当前语速使用重采样，不能独立保留音调。为跨请求保持音色，请导入你有权使用的参考 WAV 和准确文本。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -59,6 +59,13 @@ public final class MainActivity extends Activity {
             if (tts.speak(text.getText().toString(), TextToSpeech.QUEUE_FLUSH, null, "preview") != TextToSpeech.SUCCESS) message("提交失败，请导出诊断");
         });
         button(root,"停止", () -> { if (tts != null) tts.stop(); });
+        button(root,"检查系统 TTS 注册", () -> {
+            Intent service = new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE).setPackage(getPackageName());
+            var matches = getPackageManager().queryIntentServices(service, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            boolean discoverable = matches.stream().anyMatch(r -> r.serviceInfo != null && r.serviceInfo.exported && r.serviceInfo.name.equals(Audio8Service.class.getName()));
+            String report = "系统默认条件匹配：" + (discoverable ? "通过" : "未找到引擎") + "；模型：" + (ModelStore.ready(this) ? "已下载" : "未下载（不影响引擎出现在列表中）");
+            ModelStore.log(this, "tts_discovery " + report); message(report);
+        });
         button(root,"打开系统文字转语音设置", () -> {
             try { startActivity(new Intent("com.android.settings.TTS_SETTINGS")); } catch (ActivityNotFoundException e) { startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
         });
@@ -91,7 +98,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.1 " + Build.MANUFACTURER + " " + Build.MODEL + " SDK=" + Build.VERSION.SDK_INT + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.2 " + Build.MANUFACTURER + " " + Build.MODEL + " SDK=" + Build.VERSION.SDK_INT + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }
