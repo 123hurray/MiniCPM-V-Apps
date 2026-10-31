@@ -1,5 +1,0 @@
-[submodule "llama.cpp-omni"]
-	path = llama.cpp-omni
-	url = https://github.com/tc-mb/llama.cpp-omni.git
-	branch = ios-omni
-	shallow = true
