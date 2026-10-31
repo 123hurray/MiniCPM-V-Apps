@@ -7,9 +7,9 @@ if [[ ! -d "$runtime/.git" ]]; then git clone --no-checkout https://github.com/0
 git -C "$runtime" checkout --detach "$revision"
 test "$(git -C "$runtime" rev-parse HEAD)" = "$revision"
 patch="$root/scripts/audio8-mobile.patch"
-if git -C "$runtime" apply --check "$patch"; then
-  git -C "$runtime" apply "$patch"
-elif git -C "$runtime" apply --reverse --check "$patch"; then
+if git -C "$runtime" apply --ignore-space-change --check "$patch"; then
+  git -C "$runtime" apply --ignore-space-change "$patch"
+elif git -C "$runtime" apply --ignore-space-change --reverse --check "$patch"; then
   echo 'Pinned mobile optimization patch already applied'
 else
   echo 'Runtime does not match the pinned optimization patch; refusing to continue' >&2
