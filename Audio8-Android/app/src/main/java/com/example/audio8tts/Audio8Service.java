@@ -23,7 +23,7 @@ public final class Audio8Service extends TextToSpeechService {
     private volatile boolean trimRequested;
     private static final List<Locale> LOCALES=List.of(Locale.SIMPLIFIED_CHINESE,Locale.US);
     @Override protected String[] onGetLanguage() { return new String[]{current,"",""}; }
-    private boolean modelsReady() { return ModelStore.ready(this) && (!new PerformanceSettings(this).npu || NpuModelStore.ready(this)); }
+    private boolean modelsReady() { return ModelStore.ready(this) && (!new PerformanceSettings(this).codecNpu || CodecModelStore.ready(this)); }
     @Override protected int onIsLanguageAvailable(String lang,String country,String variant) {
         if (!(lang.equals("zho") || lang.equals("chi") || lang.equals("zh") || lang.equals("eng") || lang.equals("en"))) return TextToSpeech.LANG_NOT_SUPPORTED;
         return modelsReady() ? TextToSpeech.LANG_AVAILABLE : TextToSpeech.LANG_MISSING_DATA;
@@ -57,10 +57,13 @@ public final class Audio8Service extends TextToSpeechService {
             if(s.npu && !android.os.Build.SOC_MODEL.toUpperCase(Locale.ROOT).contains("SM8550"))
                 throw new IllegalStateException("NPU 实验模型仅针对 SM8550；当前 SoC="+android.os.Build.SOC_MODEL);
             if(s.npu && !NpuModelStore.ready(this)) throw new IllegalStateException("请先在设置中下载 NPU INT4 模型");
+            if(s.codecNpu && !android.os.Build.SOC_MODEL.toUpperCase(Locale.ROOT).contains("SM8550"))throw new IllegalStateException("codec NPU 实验仅支持 SM8550");
+            if(s.codecNpu && !CodecModelStore.ready(this))throw new IllegalStateException("请先下载 codec ONNX 模型");
             armWatchdog(s.loadTimeout,"模型初始化超时");
             engine=NativeEngine.load(ModelStore.model(this).getPath(),s.threads,s.affinity,
                 s.npu?NpuModelStore.dir(this).getPath():"",getApplicationInfo().nativeLibraryDir,
-                s.npu?NpuModelStore.runtimeCache(this).getPath():"",s.fastThreads,s.fastNpu);
+                NpuModelStore.runtimeCache(this).getPath(),s.fastThreads,s.fastNpu,
+                s.codecNpu?CodecModelStore.dir(this).getPath():"");
             engineKey=s.engineKey();
             disarmWatchdog();
             ModelStore.log(this,"model_load_ms="+(SystemClock.elapsedRealtime()-start)+" config="+engineKey);

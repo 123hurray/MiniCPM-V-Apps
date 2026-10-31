@@ -1,5 +1,31 @@
 # Audio8 Android system TTS
 
+## Version 4.9 — opt-in codec-only QNN experiment
+
+AR remains CPU. In advanced settings download the separate pinned 261 MB official
+Preview 0.1B ONNX FP16 codec, then enable and save the codec NPU option. Default is
+CPU. Restart the engine after changing backends. SM8550 only. The FP16 HTP attempt
+is NOT validated on-device; unsupported operators/precision fail without CPU fallback.
+The published CPU-oriented ONNX codec is not claimed to be an HTP-ready model.
+Exact frame length overrides batch/frames/samples; no zero-padding, audio splitting,
+quantization or approximate activation has been introduced. A single in-memory session
+and the latest embedded QNN context are retained, keyed by source revision and frame
+length. First compilation can time out; test a short phrase first. Disable PCM cache
+when benchmarking. Logs separate graph preparation, input conversion, Run, output
+copy and total wall time, frames/audio duration/RTF. Existing timeouts and process
+network isolation apply. AR and reference encoding still need the GGUF model.
+
+CPU codec retains the GEMM transpose-convolution and fused Snake paths. Snake now
+hoists channel indexing and alpha lookup out of the sample loop, preserving sin and
+division rather than introducing an approximate activation. CPU graph preparation is
+logged separately from execution. Actual gains require device measurements.
+
+ONNX source: Edge0/audio8-TTS-0.1B-ONNX-INT8 revision
+`317c12d4e0da83847b594fcf8bd74bf2c76615ec`. File size and SHA-256 are pinned.
+See the source model card for original license and attribution; no model weights in
+APK/git. Release code 45 reuses the persistent certificate. Cloud builds prove
+compilation only; first successful HTP execution and audio parity remain pending.
+
 ## Version 4.8 — Preview 0.1B CPU evaluation
 
 The APK now downloads the pinned 851,018,912-byte Preview 0.1B Q8 GGUF

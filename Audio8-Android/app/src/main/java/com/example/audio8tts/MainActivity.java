@@ -27,9 +27,9 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 4.8"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 4.9"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
-        note.setText("Audio8-TTS-Preview-0.1B Q8 · CPU · SoC="+Build.SOC_MODEL+"\n模型约 851 MB，从 GitHub Release 下载，不在 APK 中。旧 0.6B 文件保留，不会覆盖。\n0.1B 不支持当前 NPU INT4 导出，已禁用 NPU。仅通过 x86 CPU 基础测试；手机端音质、速度待验证。\n使用 Audio8 Community License v1.0，详见模型发布页。仍整段生成后播放，建议默认语速和音调。"); root.addView(note);
+        note.setText("Audio8-TTS-Preview-0.1B Q8 · CPU · SoC="+Build.SOC_MODEL+"\n模型约 851 MB，从 GitHub Release 下载，不在 APK 中。旧 0.6B 文件保留，不会覆盖。\nAR 使用 CPU；codec 可选 NPU 实验路径。仅通过 x86 CPU 基础测试；手机端音质、速度待验证。\n使用 Audio8 Community License v1.0，详见模型发布页。仍整段生成后播放，建议默认语速和音调。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
         PerformanceSettings perf = new PerformanceSettings(this);
         TextView perfTitle = new TextView(this); perfTitle.setText("性能设置（保存后下次请求生效；改变原生配置会重载模型）"); root.addView(perfTitle);
@@ -40,6 +40,15 @@ public final class MainActivity extends Activity {
         CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
         CheckBox npu = option(root,"Preview 0.1B 暂不支持 NPU",false); npu.setEnabled(false);
         CheckBox fastNpu = option(root,"Fast AR 使用 CPU",false); fastNpu.setEnabled(false);
+        CheckBox codecNpu=option(root,"实验：仅 codec 使用 NPU（AR 保持 CPU；失败不回退）",perf.codecNpu);
+        button(root,"保存 codec 后端",() -> {
+            try {CodecModelStore.enable(this,codecNpu.isChecked());message("已保存，下次请求重载；请先下载 codec 模型");}
+            catch(Exception e){message(e.getMessage());}
+        });
+        TextView codecNote=new TextView(this);codecNote.setText("实验 FP16 codec 约 261 MB，默认 HF-Mirror；未验证 SM8550 编译及音质。按实际帧长编译，首次可能较慢。短句先测试，关闭此选项可恢复 CPU。原有 NPU AR 模型不适用。");root.addView(codecNote);
+        button(root,"下载 / 续传 codec ONNX 模型",() -> worker.execute(() -> {try{CodecModelStore.download(this,this::message);}catch(Exception e){message("codec 下载失败："+e.getMessage());}}));
+        button(root,"codec 下载使用 HF 官方",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.OFFICIAL);message("codec 已切换至 HF 官方");}catch(Exception e){message(e.getMessage());}});
+        button(root,"codec 下载使用 HF-Mirror",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.MIRROR);message("codec 已切换至 HF-Mirror");}catch(Exception e){message(e.getMessage());}});
         TextView threadLabels = new TextView(this);threadLabels.setText("前两个输入：CPU 主干/预填充、Fast AR 的线程数；codec 在下方单独设置。它们不是 NPU 核心数。");root.addView(threadLabels);
         EditText threads = new EditText(this); threads.setHint("主干 / 预填充线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
         EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
@@ -144,7 +153,7 @@ public final class MainActivity extends Activity {
         ui.post(new Runnable(){public void run(){
             if(isDestroyed())return;
             PerformanceSettings s=new PerformanceSettings(MainActivity.this);
-            models.setText((s.npu?"NPU INT4":"Preview 0.1B · CPU")+" · 基础模型"+(ModelStore.ready(MainActivity.this)?"就绪":"未下载")+(s.npu?" · NPU模型"+(NpuModelStore.ready(MainActivity.this)?"就绪":"未下载"):""));
+            models.setText((s.npu?"NPU INT4":"Preview 0.1B · AR CPU · codec "+(s.codecNpu?"NPU 实验":"CPU"))+" · 基础模型"+(ModelStore.ready(MainActivity.this)?"就绪":"未下载")+(s.npu?" · NPU模型"+(NpuModelStore.ready(MainActivity.this)?"就绪":"未下载"):""));
             java.io.File a=new java.io.File(ModelStore.dir(MainActivity.this),"service-status.txt"),b=new java.io.File(ModelStore.dir(MainActivity.this),"native-status.txt");
             phase.setText(RuntimeStatus.read(MainActivity.this,b.lastModified()>a.lastModified()?"native-status.txt":"service-status.txt"));
             ui.postDelayed(this,1000);
@@ -160,7 +169,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.8 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.9 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }

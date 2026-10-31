@@ -1,13 +1,15 @@
 diff --git a/include/audiocpp.h b/include/audiocpp.h
-index e85ad9f..579a7a1 100644
+index e85ad9fc..890bca23 100644
 --- a/include/audiocpp.h
 +++ b/include/audiocpp.h
-@@ -54,6 +54,17 @@ extern "C" {
+@@ -54,6 +54,19 @@ extern "C" {
  #define AUDIOCPP_ABI_VERSION_MINOR 2
  #define AUDIOCPP_ABI_VERSION_PATCH 0
  
 +/* Audio8 Android extension; controls apply only to the calling thread. */
 +AUDIOCPP_API void audiocpp_audio8_progress(void (*progress)(const char *));
++typedef int (*audiocpp_audio8_codec_fn)(void *, const int32_t *, int64_t, int64_t, const float **, int64_t *);
++AUDIOCPP_API void audiocpp_audio8_external_codec(audiocpp_audio8_codec_fn, const char * (*)(void *), void *);
 +AUDIOCPP_API void audiocpp_audio8_codec_options(int threads,int optimized);
 +AUDIOCPP_API void audiocpp_audio8_mobile_options(int compact_head, int retain_graphs,
 +    int slow_threads, int fast_threads, int (*cancelled)(void *), void * user);
@@ -22,10 +24,10 @@ index e85ad9f..579a7a1 100644
   * are added -- nothing is removed or changed -- so a caller needing a newer one
 diff --git a/include/engine/community_models/audio8_tts/mobile.h b/include/engine/community_models/audio8_tts/mobile.h
 new file mode 100644
-index 0000000..d2cbf9f
+index 00000000..d6035eab
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile.h
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,33 @@
 +#pragma once
 +#include <cstdint>
 +#include <stdexcept>
@@ -38,6 +40,9 @@ index 0000000..d2cbf9f
 +                   const float *, float *, int64_t, float *, int64_t) = nullptr;
 +    const char * (*forward_error)(void *) = nullptr;
 +    void * forward_user = nullptr;
++    int (*codec_decode)(void *, const int32_t *, int64_t, int64_t, const float **, int64_t *) = nullptr;
++    const char * (*codec_error)(void *) = nullptr;
++    void * codec_user = nullptr;
 +    bool compact_head = false;
 +    bool retain_graphs = false;
 +    int fast_threads = 0;
@@ -58,10 +63,10 @@ index 0000000..d2cbf9f
 +}
 diff --git a/include/engine/community_models/audio8_tts/mobile_codec.h b/include/engine/community_models/audio8_tts/mobile_codec.h
 new file mode 100644
-index 0000000..c6f5722
+index 00000000..e868dbce
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile_codec.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,60 @@
 +#pragma once
 +#include <ggml.h>
 +#include <algorithm>
@@ -103,9 +108,16 @@ index 0000000..c6f5722
 +inline void mobile_snake_kernel(ggml_tensor * dst,const ggml_tensor * x,const ggml_tensor * alpha,int ith,int nth,void *) {
 +    const auto * input=static_cast<const float *>(x->data);const auto * scales=static_cast<const float *>(alpha->data);
 +    auto * out=static_cast<float *>(dst->data);const int64_t count=ggml_nelements(x);
-+    for(int64_t i=count*ith/nth;i<count*(ith+1)/nth;++i) {
-+        const float a=scales[(i/x->ne[0])%x->ne[1]],s=std::sin(a*input[i]);
-+        out[i]=input[i]+(s*s)/a;
++    const int64_t end=count*(ith+1)/nth;
++    int64_t i=count*ith/nth;
++    while(i<end) {
++        const int64_t channel=i/x->ne[0];
++        const int64_t stop=std::min(end,(channel+1)*x->ne[0]);
++        const float a=scales[channel%x->ne[1]];
++        for(;i<stop;++i) {
++            const float sine=std::sin(a*input[i]);
++            out[i]=input[i]+(sine*sine)/a;
++        }
 +    }
 +}
 +inline ggml_tensor * mobile_snake(ggml_context * ctx,ggml_tensor * x,ggml_tensor * alpha) {
@@ -117,7 +129,7 @@ index 0000000..c6f5722
 +}
 diff --git a/include/engine/community_models/audio8_tts/mobile_math.h b/include/engine/community_models/audio8_tts/mobile_math.h
 new file mode 100644
-index 0000000..9dddbef
+index 00000000..9dddbefb
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile_math.h
 @@ -0,0 +1,25 @@
@@ -147,10 +159,10 @@ index 0000000..9dddbef
 +}
 +}
 diff --git a/src/capi/audiocpp.cpp b/src/capi/audiocpp.cpp
-index 6915460..c18c33c 100644
+index 69154602..ec4abd62 100644
 --- a/src/capi/audiocpp.cpp
 +++ b/src/capi/audiocpp.cpp
-@@ -13,6 +13,31 @@
+@@ -13,6 +13,35 @@
   */
  
  #include "audiocpp.h"
@@ -158,6 +170,10 @@ index 6915460..c18c33c 100644
 +
 +void audiocpp_audio8_progress(void (*progress)(const char *)) {
 +    engine::models::audio8_tts::mobile_options.progress=progress;
++}
++void audiocpp_audio8_external_codec(audiocpp_audio8_codec_fn fn, const char * (*error)(void *), void * user) {
++    auto & m=engine::models::audio8_tts::mobile_options;
++    m.codec_decode=fn;m.codec_error=error;m.codec_user=user;
 +}
 +void audiocpp_audio8_codec_options(int threads,int optimized) {
 +    auto & m=engine::models::audio8_tts::mobile_options;
@@ -183,7 +199,7 @@ index 6915460..c18c33c 100644
  #include "engine/framework/runtime/task_vocabulary.h"
  
 diff --git a/src/community_models/audio8_tts/ar.cpp b/src/community_models/audio8_tts/ar.cpp
-index ce70887..9b20418 100644
+index ce70887c..9b20418f 100644
 --- a/src/community_models/audio8_tts/ar.cpp
 +++ b/src/community_models/audio8_tts/ar.cpp
 @@ -1,4 +1,6 @@
@@ -473,7 +489,7 @@ index ce70887..9b20418 100644
      sampling::TorchCudaSamplingPolicy sampling_policy_;
      std::unique_ptr<PrefillGraph> prefill_graph_;
 diff --git a/src/community_models/audio8_tts/codec.cpp b/src/community_models/audio8_tts/codec.cpp
-index 741fd02..fff6b8b 100644
+index 741fd029..dacac4a0 100644
 --- a/src/community_models/audio8_tts/codec.cpp
 +++ b/src/community_models/audio8_tts/codec.cpp
 @@ -1,6 +1,8 @@
@@ -538,8 +554,41 @@ index 741fd02..fff6b8b 100644
          const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
          ggml_backend_synchronize(backend_);
          if (status != GGML_STATUS_SUCCESS) {
+@@ -1271,9 +1287,13 @@ public:
+     }
+ 
+     runtime::AudioBuffer decode(const Audio8TtsCodes & codes) {
+-        if (decode_graph_ == nullptr || !decode_graph_->matches(codes.frames, execution_.backend(), threads_)) {
++        const auto prepare_start=std::chrono::steady_clock::now();
++        bool reused=decode_graph_ != nullptr && decode_graph_->matches(codes.frames, execution_.backend(), threads_);
++        if (!reused) {
+             decode_graph_ = std::make_unique<DecodeGraph>(assets_, weights_, execution_, graph_arena_bytes_, codes.frames);
+         }
++        std::fprintf(stderr,"Audio8 codec CPU graph_prepare_ms=%.2f graph_reused=%d frames=%lld\n",
++            std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-prepare_start).count(),reused,(long long)codes.frames);
+         return decode_graph_->run(codes);
+     }
+ 
+@@ -1320,6 +1340,17 @@ Audio8TtsCodes Audio8TtsCodecRuntime::encode_reference(const runtime::AudioBuffe
+ }
+ 
+ runtime::AudioBuffer Audio8TtsCodecRuntime::decode(const Audio8TtsCodes & codes) {
++    auto & m=mobile_options;
++    if(m.codec_decode) {
++        mobile_check_cancelled();
++        const float * samples=nullptr;int64_t count=0;
++        if(m.progress)m.progress("解码音频 · NPU codec 实验");
++        if(m.codec_decode(m.codec_user,codes.codes.data(),codes.codebooks,codes.frames,&samples,&count)!=0)
++            throw std::runtime_error(m.codec_error?m.codec_error(m.codec_user):"NPU codec failed");
++        if(!samples || count!=codes.frames*2048)throw std::runtime_error("NPU codec sample contract mismatch");
++        runtime::AudioBuffer result{44100,1,std::vector<float>(samples,samples+count)};
++        mobile_check_cancelled();return result;
++    }
+     return impl_->decode(codes);
+ }
+ 
 diff --git a/src/community_models/audio8_tts/generator.cpp b/src/community_models/audio8_tts/generator.cpp
-index a9fecf0..d57336f 100644
+index a9fecf01..d57336f0 100644
 --- a/src/community_models/audio8_tts/generator.cpp
 +++ b/src/community_models/audio8_tts/generator.cpp
 @@ -1,4 +1,6 @@
@@ -587,7 +636,7 @@ index a9fecf0..d57336f 100644
          ar_->release_runtime_graphs();
      }
 diff --git a/src/framework/modules/activation_modules.cpp b/src/framework/modules/activation_modules.cpp
-index fa4fc02..9b6502c 100644
+index fa4fc022..9b6502c3 100644
 --- a/src/framework/modules/activation_modules.cpp
 +++ b/src/framework/modules/activation_modules.cpp
 @@ -1,4 +1,6 @@

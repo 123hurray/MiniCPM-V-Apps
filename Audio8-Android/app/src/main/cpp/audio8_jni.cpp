@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <audiocpp.h>
 #include "onnx_ar.h"
+#include "onnx_codec.h"
 #include "runtime_status.h"
 #include <algorithm>
 #include <cmath>
@@ -40,16 +41,18 @@ void check(audiocpp_status status) { if(status!=AUDIOCPP_OK) throw std::runtime_
 void fail(JNIEnv* e,const std::exception& x) { if(!e->ExceptionCheck()) e->ThrowNew(e->FindClass("java/lang/IllegalStateException"),x.what()); }
 struct Engine {
     std::unique_ptr<OnnxAr> ar;
+    std::unique_ptr<OnnxCodec> codec;
     audiocpp_registry* registry=nullptr;
     audiocpp_model* model=nullptr;
     audiocpp_session* session=nullptr;
     ~Engine(){ audiocpp_session_free(session); audiocpp_model_free(model); audiocpp_registry_free(registry); }
 };
 struct ExternalScope {
-    explicit ExternalScope(OnnxAr * ar) {
+    explicit ExternalScope(OnnxAr * ar,OnnxCodec * codec) {
+        audiocpp_audio8_external_codec(codec?OnnxCodec::decode:nullptr,codec?OnnxCodec::error:nullptr,codec);
         audiocpp_audio8_external_forward(ar?OnnxAr::forward:nullptr,ar?OnnxAr::error:nullptr,ar);
     }
-    ~ExternalScope() { audiocpp_audio8_external_forward(nullptr,nullptr,nullptr); }
+    ~ExternalScope() { audiocpp_audio8_external_codec(nullptr,nullptr,nullptr); audiocpp_audio8_external_forward(nullptr,nullptr,nullptr); }
 };
 struct AffinityScope {
     cpu_set_t previous{}; bool changed=false;
@@ -84,7 +87,7 @@ struct MobileScope {
     ~MobileScope(){audiocpp_audio8_codec_options(0,0);audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
 };
 }
-extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu) {
+extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu,jstring codecModels) {
     try {
         std::string file=utf8(e,path);
         std::string log=file.substr(0,file.find_last_of('/'))+"/diagnostics-native.txt";
@@ -96,7 +99,8 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         auto h=std::make_unique<Engine>();
         const std::string npu=utf8(e,npuModels);
         if(!npu.empty()) h->ar=std::make_unique<OnnxAr>(npu,utf8(e,libraries),utf8(e,cache),int(threads),int(fastThreads),bool(fastNpu));
-        ExternalScope external(h->ar.get());
+        if(codecModels && !utf8(e,codecModels).empty())h->codec=std::make_unique<OnnxCodec>(utf8(e,codecModels),utf8(e,libraries),utf8(e,cache)+"/preview01-codec-317c12d");
+        ExternalScope external(h->ar.get(),h->codec.get());
         check(audiocpp_registry_create(nullptr,&h->registry));
         audiocpp_model_config config{"audio8_tts",nullptr,nullptr,nullptr};
         audio8_stage("加载 GGUF 与音频 codec");
@@ -111,7 +115,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
-        ExternalScope external(h->ar.get());
+        ExternalScope external(h->ar.get(),h->codec.get());
         AffinityScope affinityScope(affinity);
         MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8),std::clamp(int(codecThreads),1,8),bool(codecFast));
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);

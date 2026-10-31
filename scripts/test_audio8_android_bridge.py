@@ -64,7 +64,7 @@ class AndroidBridgeTests(unittest.TestCase):
 
     def test_callback_bound_for_load_and_synthesis(self):
         source=(CPP/'audio8_jni.cpp').read_text()
-        self.assertEqual(source.count('ExternalScope external(h->ar.get());'),2)
+        self.assertEqual(source.count('ExternalScope external(h->ar.get(),h->codec.get());'),2)
         self.assertIn('OnnxAr::forward',source)
         self.assertIn('audiocpp_audio8_external_forward(nullptr,nullptr,nullptr)',source)
         patch=(ROOT/'scripts/audio8-mobile.patch').read_text()
