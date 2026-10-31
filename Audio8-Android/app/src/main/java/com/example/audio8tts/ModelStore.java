@@ -13,7 +13,15 @@ import java.security.MessageDigest;
 final class ModelStore {
     static final long SIZE = 1429460800L;
     static final String HASH = "e8a2402b50341b12316f94e78afd8b69d38010c5d3ba3878d64ca8f9ea90a930";
-    static final String URL_MODEL = "https://huggingface.co/audio-cpp/Audio8-TTS-Realistic-0.6b-GGUF/resolve/b57015b9e916ede150f4b168b4b882be37ad723f/audio8-tts-realistic-0.6b-q8_0.gguf";
+    static String endpoint(Context c) {
+        String stored = c.getSharedPreferences("downloads", Context.MODE_PRIVATE).getString("hf_endpoint", DownloadEndpoint.MIRROR);
+        try { return DownloadEndpoint.normalize(stored); } catch (IllegalArgumentException e) { return DownloadEndpoint.MIRROR; }
+    }
+    static String saveEndpoint(Context c, String value) throws IOException {
+        String normalized = DownloadEndpoint.normalize(value);
+        if (!c.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().putString("hf_endpoint", normalized).commit()) throw new IOException("无法保存下载域名");
+        return normalized;
+    }
     interface Progress { void update(String message); }
     static File dir(Context c) { File d = new File(c.getFilesDir(), "audio8"); d.mkdirs(); return d; }
     static File model(Context c) { return new File(dir(c), "realistic-q8.gguf"); }
@@ -46,17 +54,21 @@ final class ModelStore {
         Files.move(tmp.toPath(), reference(c).toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
     static void download(Context c, Progress p) throws Exception {
+        String origin = endpoint(c);
+        p.update("连接下载源：" + origin);
+        log(c, "download_source=" + origin);
         File part = new File(dir(c), "model.part"); long offset = part.length();
         if (offset > SIZE) throw new IOException("下载临时文件过大，请清除应用数据后重试");
         if (offset < SIZE) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(URL_MODEL).openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URL(DownloadEndpoint.modelUrl(origin)).openConnection();
             conn.setConnectTimeout(30000); conn.setReadTimeout(60000);
+            conn.setRequestProperty("Accept-Encoding", "identity");
             if (offset > 0) conn.setRequestProperty("Range", "bytes=" + offset + "-");
             try {
                 int status = conn.getResponseCode();
-                if (status != 200 && status != 206) throw new IOException("HTTP " + status);
+                if (status != 200 && status != 206) throw new IOException(origin + " 返回 HTTP " + status + "，可切换下载源后续传");
                 if (status == 200) offset = 0;
-                else if (!conn.getHeaderField("Content-Range").startsWith("bytes " + offset + "-")) throw new IOException("断点响应不匹配");
+                else if (!DownloadEndpoint.matchesRange(conn.getHeaderField("Content-Range"), offset, SIZE)) throw new IOException("断点响应不匹配，原有进度已保留；请切换下载源重试");
                 try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(part, offset > 0)) {
                     byte[] b = new byte[262144]; long total = offset, reported = 0; int n;
                     while ((n = in.read(b)) != -1) {

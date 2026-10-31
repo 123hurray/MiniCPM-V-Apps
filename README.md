@@ -1,5 +1,15 @@
 # Audio8 Android system TTS
 
+Version 4.1 adds an editable HTTPS Hugging Face mirror origin, defaulting to
+`https://hf-mirror.com`, with an official-direct shortcut. Both download the identical
+pinned model path and must pass the same SHA-256 check. Switching endpoints keeps
+the existing partial model. Settings take effect on the next download attempt.
+HF-Mirror is a third-party mirror, not a Hugging Face-operated service.
+
+Audio8 release certificate SHA-256 (reuse for every future update):
+`42bf8536d97d3a3e6ccb42252a91cd471296045c6455eb7d55d202bb868a8905`.
+Private key recovery is kept separately, never in this repository.
+
 This branch replaces the previous multimodal/agent/ASR application with an Android-only
 Audio8-TTS-Realistic-0.6B engine. Other branches are unchanged. No model is bundled.
 
