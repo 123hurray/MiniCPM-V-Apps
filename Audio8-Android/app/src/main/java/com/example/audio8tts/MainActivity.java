@@ -27,9 +27,9 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 4.7"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 4.8"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
-        note.setText("Audio8-TTS-Realistic-0.6B · SoC="+Build.SOC_MODEL+"\nCPU 基础模型约 1.43 GB，已有文件保留。NPU 另下载约 0.9 GB 模型，请预留至少 5 GB 空间。模型不在 APK 中。\nNPU 实验路径：主干解码 HTP INT4；预填充、codec 保留 CPU。Fast AR 可选 CPU INT4 / NPU。不是全模型 NPU。\n首次 NPU 编译可能需要数分钟，后续复用缓存。无法启动时会报错，不会静默改用 CPU。推理进程禁止新建互联网 socket；下载由独立界面进程完成。\n仍整段生成后播放，不随机拆段；停止在 AR 步间生效，不能中断单次加载或 codec 计算。语速和音调建议默认。"); root.addView(note);
+        note.setText("Audio8-TTS-Preview-0.1B Q8 · CPU · SoC="+Build.SOC_MODEL+"\n模型约 851 MB，从 GitHub Release 下载，不在 APK 中。旧 0.6B 文件保留，不会覆盖。\n0.1B 不支持当前 NPU INT4 导出，已禁用 NPU。仅通过 x86 CPU 基础测试；手机端音质、速度待验证。\n使用 Audio8 Community License v1.0，详见模型发布页。仍整段生成后播放，建议默认语速和音调。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
         PerformanceSettings perf = new PerformanceSettings(this);
         TextView perfTitle = new TextView(this); perfTitle.setText("性能设置（保存后下次请求生效；改变原生配置会重载模型）"); root.addView(perfTitle);
@@ -38,10 +38,8 @@ public final class MainActivity extends Activity {
         CheckBox affinity = option(root,"优先使用高频 CPU 核心",perf.affinity);
         CheckBox prewarm = option(root,"自动预热已停用（避免阻塞试听）",false);prewarm.setEnabled(false);
         CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
-        CheckBox npu = option(root,"启用主干 NPU INT4（SM8550 实验模式，需另下模型）",perf.npu);
-        CheckBox fastNpu = option(root,"Fast AR 也用 NPU（可与 CPU INT4 对比）",perf.fastNpu);
-        fastNpu.setEnabled(npu.isChecked());
-        npu.setOnCheckedChangeListener((b,checked) -> fastNpu.setEnabled(checked));
+        CheckBox npu = option(root,"Preview 0.1B 暂不支持 NPU",false); npu.setEnabled(false);
+        CheckBox fastNpu = option(root,"Fast AR 使用 CPU",false); fastNpu.setEnabled(false);
         TextView threadLabels = new TextView(this);threadLabels.setText("前两个输入：CPU 主干/预填充、Fast AR 的线程数；codec 在下方单独设置。它们不是 NPU 核心数。");root.addView(threadLabels);
         EditText threads = new EditText(this); threads.setHint("主干 / 预填充线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
         EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
@@ -74,37 +72,9 @@ public final class MainActivity extends Activity {
                 npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐 CPU 优化设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
         });
-        TextView npuStatus=new TextView(this);npuStatus.setText(NpuModelStore.ready(this)?"NPU 模型已就绪":"NPU 模型未下载");root.addView(npuStatus);
-        EditText npuOrigin=new EditText(this);npuOrigin.setSingleLine(true);npuOrigin.setText(NpuModelStore.origin(this));npuOrigin.setHint("NPU Release 下载基础地址，可填写 HTTPS 代理路径");root.addView(npuOrigin);
-        button(root,"下载 / 续传 NPU INT4 模型", () -> {
-            try { NpuModelStore.saveOrigin(this,npuOrigin.getText().toString()); }
-            catch(Exception e) { message(e.getMessage());return; }
-            worker.execute(() -> {
-                try { NpuModelStore.download(this,this::message);runOnUiThread(() -> npuStatus.setText("NPU 模型已就绪，请重新连接系统引擎")); }
-                catch(Exception e) { ModelStore.log(this,"npu_download_error "+e);message("NPU 下载失败："+e.getMessage()); }
-            });
-        });
         button(root,"重新连接系统语音引擎", () -> recreate());
-        TextView sourceNote = new TextView(this);
-        sourceNote.setText("Hugging Face 下载域名（默认第三方 HF-Mirror，仅影响模型下载）\n切换源保留下载进度，文件仍校验固定 SHA-256。填写域名即可，无需模型路径或 Token。"); root.addView(sourceNote);
-        EditText endpoint = new EditText(this); endpoint.setSingleLine(true);
-        endpoint.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        endpoint.setHint(DownloadEndpoint.MIRROR); endpoint.setText(ModelStore.endpoint(this)); root.addView(endpoint);
-        button(root,"保存自定义下载域名", () -> {
-            try { endpoint.setText(ModelStore.saveEndpoint(this, endpoint.getText().toString())); message("已保存，下次下载生效"); }
-            catch (Exception e) { message(e.getMessage()); }
-        });
-        button(root,"使用 HF-Mirror 镜像", () -> {
-            try { endpoint.setText(ModelStore.saveEndpoint(this, DownloadEndpoint.MIRROR)); message("已切换至 HF-Mirror，下次下载生效"); }
-            catch (IOException e) { message(e.getMessage()); }
-        });
-        button(root,"使用 Hugging Face 官方直连", () -> {
-            try { endpoint.setText(ModelStore.saveEndpoint(this, DownloadEndpoint.OFFICIAL)); message("已切换至官方直连，下次下载生效"); }
-            catch (IOException e) { message(e.getMessage()); }
-        });
+        TextView sourceNote = new TextView(this); sourceNote.setText("Preview 0.1B Q8：GitHub Release 固定版本；支持断点续传及 SHA-256 校验。下载需能访问 GitHub。旧版 HF 镜像设置不影响此模型。\nPreview 使用 Audio8 Community License v1.0，手机端音质、速度待验证。"); root.addView(sourceNote);
         download = button(root, "下载 / 续传模型", () -> {
-            try { endpoint.setText(ModelStore.saveEndpoint(this, endpoint.getText().toString())); }
-            catch (Exception e) { message(e.getMessage()); return; }
             download.setEnabled(false);
             worker.execute(() -> { try { ModelStore.download(this,this::message); } catch (Exception e) { ModelStore.log(this,"download_error " + e); message("下载失败：" + e.getMessage()); } finally { runOnUiThread(() -> download.setEnabled(true)); } });
         });
@@ -170,11 +140,11 @@ public final class MainActivity extends Activity {
             root.setVisibility(open?android.view.View.GONE:android.view.View.VISIBLE);
             expand.setText(open?"模型、音色与高级设置 ▸":"收起高级设置 ▾");
         });
-        TextView limits=new TextView(this);limits.setText("加载最长 4 分钟，合成最长 3 分钟。超时会结束语音进程，不删除模型。NPU 首次编译尚未真机验证。");root.addView(limits);
+        TextView limits=new TextView(this);limits.setText("加载最长 4 分钟，合成最长 3 分钟。超时会结束语音进程，不删除模型。Preview 0.1B 手机端音质与速度待验证。");root.addView(limits);
         ui.post(new Runnable(){public void run(){
             if(isDestroyed())return;
             PerformanceSettings s=new PerformanceSettings(MainActivity.this);
-            models.setText((s.npu?"NPU INT4":"CPU")+" · 基础模型"+(ModelStore.ready(MainActivity.this)?"就绪":"未下载")+(s.npu?" · NPU模型"+(NpuModelStore.ready(MainActivity.this)?"就绪":"未下载"):""));
+            models.setText((s.npu?"NPU INT4":"Preview 0.1B · CPU")+" · 基础模型"+(ModelStore.ready(MainActivity.this)?"就绪":"未下载")+(s.npu?" · NPU模型"+(NpuModelStore.ready(MainActivity.this)?"就绪":"未下载"):""));
             java.io.File a=new java.io.File(ModelStore.dir(MainActivity.this),"service-status.txt"),b=new java.io.File(ModelStore.dir(MainActivity.this),"native-status.txt");
             phase.setText(RuntimeStatus.read(MainActivity.this,b.lastModified()>a.lastModified()?"native-status.txt":"service-status.txt"));
             ui.postDelayed(this,1000);
@@ -190,7 +160,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.7 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.8 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }

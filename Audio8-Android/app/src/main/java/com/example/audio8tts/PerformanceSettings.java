@@ -17,7 +17,7 @@ final class PerformanceSettings {
         compact = bool(p,"compact",true); graphs = bool(p,"graphs",true);
         affinity = bool(p,"affinity",true); prewarm = false; // Old automatic synthesis warmup is intentionally retired.
         cache = bool(p,"cache",true);
-        npu = bool(p,"npu",false); fastNpu = bool(p,"fast_npu",false);
+        npu = false; fastNpu = false; // Preview 0.1B has no compatible NPU export.
         threads = number(p,"threads",5); fastThreads = number(p,"fast_threads",2);
         codecThreads=number(p,"codec_threads",5);codecFast=bool(p,"codec_fast",true);
         loadTimeout=timeout(p,"load_timeout",240);synthesisTimeout=timeout(p,"synthesis_timeout",180);
@@ -44,5 +44,5 @@ final class PerformanceSettings {
         try { p.store(out,"Audio8 performance"); f.finishWrite(out); }
         catch (java.io.IOException e) { f.failWrite(out); throw e; }
     }
-    String engineKey() { return compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu+":codec="+codecThreads+":"+codecFast; }
+    String engineKey() { return "preview01:"+compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu+":codec="+codecThreads+":"+codecFast; }
 }

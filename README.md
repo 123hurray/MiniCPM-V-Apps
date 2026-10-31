@@ -1,5 +1,17 @@
 # Audio8 Android system TTS
 
+## Version 4.8 — Preview 0.1B CPU evaluation
+
+The APK now downloads the pinned 851,018,912-byte Preview 0.1B Q8 GGUF
+from the `audio8-preview01-q8-v1` GitHub Release, with SHA-256 verification.
+It uses distinct final/partial filenames, retaining the previous Realistic model.
+Old NPU preferences are ignored; the Realistic NPU export is incompatible.
+HF mirror settings do not apply to this release. CPU inference and the
+existing voice-reference controls remain available. This is a Preview checkpoint
+under Audio8 Community License v1.0, not the Apache-licensed Realistic model.
+Only native x86 CPU smoke validation exists; Android quality/speed need testing.
+Version code 44 reuses the persistent release signing certificate.
+
 ## Version 4.7 — CPU codec kernels and independent decode threads
 
 Codec defaults to 5 independently configurable CPU threads, no longer inheriting

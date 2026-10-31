@@ -28,6 +28,7 @@ public final class DownloadEndpoint {
         }
     }
     public static String modelUrl(String endpoint) { return normalize(endpoint) + MODEL_PATH; }
+    public static String previewModelUrl() { return "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/audio8-preview01-q8-v1/audio8-preview-0.1b-q8_0.gguf"; }
     public static boolean matchesRange(String header, long offset, long size) {
         if (header == null || offset < 0 || size <= offset) return false;
         Matcher match = RANGE.matcher(header);

@@ -11,8 +11,8 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 
 final class ModelStore {
-    static final long SIZE = 1429460800L;
-    static final String HASH = "e8a2402b50341b12316f94e78afd8b69d38010c5d3ba3878d64ca8f9ea90a930";
+    static final long SIZE = 851018912L;
+    static final String HASH = "fdab2e5c14e2cd00d198b752c52cb3d92097ee18fd54f4ef4eed99ee5d8c512e";
     static String endpoint(Context c) {
         String stored = c.getSharedPreferences("downloads", Context.MODE_PRIVATE).getString("hf_endpoint", DownloadEndpoint.MIRROR);
         try { return DownloadEndpoint.normalize(stored); } catch (IllegalArgumentException e) { return DownloadEndpoint.MIRROR; }
@@ -24,7 +24,7 @@ final class ModelStore {
     }
     interface Progress { void update(String message); }
     static File dir(Context c) { File d = new File(c.getFilesDir(), "audio8"); d.mkdirs(); return d; }
-    static File model(Context c) { return new File(dir(c), "realistic-q8.gguf"); }
+    static File model(Context c) { return new File(dir(c), "preview-0.1b-q8.gguf"); }
     static boolean ready(Context c) { return model(c).length() == SIZE; }
     static File reference(Context c) { return new File(dir(c), "reference.wav"); }
     static File transcript(Context c) { return new File(dir(c), "reference.txt"); }
@@ -54,13 +54,13 @@ final class ModelStore {
         Files.move(tmp.toPath(), reference(c).toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
     static void download(Context c, Progress p) throws Exception {
-        String origin = endpoint(c);
+        String origin = "https://github.com";
         p.update("连接下载源：" + origin);
         log(c, "download_source=" + origin);
-        File part = new File(dir(c), "model.part"); long offset = part.length();
+        File part = new File(dir(c), "preview-0.1b-q8.part"); long offset = part.length();
         if (offset > SIZE) throw new IOException("下载临时文件过大，请清除应用数据后重试");
         if (offset < SIZE) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(DownloadEndpoint.modelUrl(origin)).openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URL(DownloadEndpoint.previewModelUrl()).openConnection();
             conn.setConnectTimeout(30000); conn.setReadTimeout(60000);
             conn.setRequestProperty("Accept-Encoding", "identity");
             if (offset > 0) conn.setRequestProperty("Range", "bytes=" + offset + "-");

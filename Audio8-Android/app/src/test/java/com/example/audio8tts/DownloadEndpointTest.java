@@ -14,6 +14,11 @@ public final class DownloadEndpointTest {
         check(official.contains("/resolve/b57015b9e916ede150f4b168b4b882be37ad723f/"));
         for (String invalid : new String[]{"", "http://hf-mirror.com", "hf-mirror.com", "https://user:password@mirror.example", "https://mirror.example/model", "https://mirror.example/?token=x", "https://mirror.example/#x", "https://mirror.example:0", "https://mirror.example:65536"}) rejected(invalid);
         rejected(null);
+        var preview = java.net.URI.create(DownloadEndpoint.previewModelUrl());
+        check(preview.getScheme().equals("https") && preview.getHost().equals("github.com"));
+        check(preview.getPath().endsWith("/audio8-preview01-q8-v1/audio8-preview-0.1b-q8_0.gguf"));
+        check(DownloadEndpoint.matchesRange("bytes 1024-851018911/851018912", 1024, 851018912L));
+        check(!DownloadEndpoint.matchesRange("bytes 1024-1429460799/1429460800", 1024, 851018912L));
         check(DownloadEndpoint.matchesRange("bytes 10-99/100", 10, 100));
         check(!DownloadEndpoint.matchesRange(null, 10, 100));
         check(!DownloadEndpoint.matchesRange("bytes 11-99/100", 10, 100));
