@@ -43,6 +43,12 @@ jobs:
       - name: Prepare unsigned signing inputs
         run: |
           mkdir -p out
+          cache=$(rg --files --hidden Audio8-Android/app/.cxx | rg '/arm64-v8a/CMakeCache.txt$' | head -n 1)
+          native_dir=$(dirname "$cache")
+          cp "$native_dir/audio8-optimization.txt" out/native-optimization-config.txt
+          grep -F 'arm_arch=armv8.6-a+dotprod+fp16+i8mm' out/native-optimization-config.txt
+          rg -m 1 -- '-flto' "$native_dir/build.ninja" >> out/native-optimization-config.txt
+          rg -m 1 -- '-O3' "$native_dir/build.ninja" >> out/native-optimization-config.txt
           cp Audio8-Android/app/build/outputs/apk/release/app-release-unsigned.apk out/Audio8-Android-v4.3-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" out/
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging out/Audio8-Android-v4.3-unsigned.apk | tee out/apk-metadata.txt
@@ -78,7 +84,8 @@ jobs:
         if: always()
         with:
           name: Audio8-build-diagnostics
+          include-hidden-files: true
           path: |
             Audio8-Android/app/build/reports/
-            Audio8-Android/app/.cxx/Release/*/arm64-v8a/*.txt
+            Audio8-Android/app/.cxx/**/arm64-v8a/*.txt
           if-no-files-found: ignore
