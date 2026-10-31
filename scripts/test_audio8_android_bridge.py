@@ -8,6 +8,22 @@ CPP=ROOT/'Audio8-Android/app/src/main/cpp'
 JAVA=ROOT/'Audio8-Android/app/src/main/java/com/example/audio8tts'
 
 class AndroidBridgeTests(unittest.TestCase):
+    def test_bounded_requests_and_no_automatic_warmup(self):
+        service=(JAVA/'Audio8Service.java').read_text()
+        self.assertNotIn('warmup_begin',service)
+        self.assertNotIn('scheduleWarmup',service)
+        self.assertIn('armWatchdog(s.loadTimeout',service)
+        self.assertIn('armWatchdog(s.synthesisTimeout',service)
+        self.assertIn('},15,TimeUnit.SECONDS)',service)
+        self.assertIn('killProcess(android.os.Process.myPid())',service)
+        ui=(JAVA/'MainActivity.java').read_text()
+        self.assertIn('speechWorker.execute',ui)
+        self.assertIn('root.setVisibility(android.view.View.GONE)',ui)
+        self.assertIn('EngineControlReceiver.class',ui)
+        self.assertIn('native-status.txt',ui)
+        manifest=(ROOT/'Audio8-Android/app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('android:name=".EngineControlReceiver" android:process=":synthesis" android:exported="false"',manifest)
+
     def test_npu_placement_and_fail_closed(self):
         source=(CPP/'onnx_ar.cpp').read_text()
         self.assertLess(source.index('require_offline_synthesis_process();'),source.index('env=Ort::Env'))

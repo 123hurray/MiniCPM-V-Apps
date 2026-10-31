@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <audiocpp.h>
 #include "onnx_ar.h"
+#include "runtime_status.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -73,20 +74,23 @@ struct MobileScope {
         :env(e),sink(s) {
         jclass cls=e->GetObjectClass(s); cancelled=e->GetMethodID(cls,"cancelled","()Z"); e->DeleteLocalRef(cls);
         if(!cancelled) throw std::runtime_error("Cancellation callback missing");
+        audiocpp_audio8_progress([](const char * phase){audio8_stage(phase);});
         audiocpp_audio8_mobile_options(compact,graphs,slow,fast,[](void * p){
             auto * self=static_cast<MobileScope*>(p);
             return int(self->env->ExceptionCheck() || self->env->CallBooleanMethod(self->sink,self->cancelled));
         },this);
     }
-    ~MobileScope(){audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
+    ~MobileScope(){audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
 };
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu) {
     try {
         std::string file=utf8(e,path);
         std::string log=file.substr(0,file.find_last_of('/'))+"/diagnostics-native.txt";
+        audio8_status_path=file.substr(0,file.find_last_of('/'))+"/native-status.txt";
         int fd=open(log.c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
         if(fd>=0){dup2(fd,STDERR_FILENO);close(fd);setvbuf(stderr,nullptr,_IONBF,0);}
+        audio8_stage("进入原生加载");
         AffinityScope affinityScope(affinity);
         auto h=std::make_unique<Engine>();
         const std::string npu=utf8(e,npuModels);
@@ -94,9 +98,11 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         ExternalScope external(h->ar.get());
         check(audiocpp_registry_create(nullptr,&h->registry));
         audiocpp_model_config config{"audio8_tts",nullptr,nullptr,nullptr};
+        audio8_stage("加载 GGUF 与音频 codec");
         check(audiocpp_model_load(h->registry,file.c_str(),&config,nullptr,&h->model));
         audiocpp_backend_config backend{"cpu",0,std::clamp(int(threads),1,8)};
         check(audiocpp_session_create(h->model,"tts","offline",&backend,nullptr,&h->session));
+        audio8_stage("模型就绪");
         return reinterpret_cast<jlong>(h.release());
     } catch(const std::exception& x) { fail(e,x);return 0; }
 }
@@ -119,7 +125,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthe
             check(audiocpp_request_set_option(request.get(),"multi_reference_cond",references.c_str()));
         }
         audiocpp_result* raw=nullptr;
+        audio8_stage("生成语音");
         check(audiocpp_session_run(h->session,request.get(),&raw));
+        audio8_stage("音频已生成，准备播放");
         if(h->ar) h->ar->summary();
         std::unique_ptr<audiocpp_result,decltype(&audiocpp_result_free)> result(raw,audiocpp_result_free);
         const float* samples=nullptr; size_t frames=0; int sampleRate=0,channels=0;

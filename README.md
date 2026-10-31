@@ -1,5 +1,18 @@
 # Audio8 Android system TTS
 
+## Version 4.5 — bounded requests and concise status
+
+Automatic voice-selection warmup has been removed, including for old preferences.
+The home screen shows only readiness, the latest phase with elapsed time, and preview /
+stop / recovery controls. Model, voice and performance details are collapsed by default.
+TTS binder operations run off the UI thread. A separate-process watchdog ends only the
+synthesis process after 240 seconds of initialization or 180 seconds of synthesis;
+stop allows 15 seconds for native cancellation before the same process-only recovery.
+A private receiver provides manual recovery without deleting models. Reconnect the
+engine after a reset. Initialization phases and CPU AR / codec stages are persisted
+before execution, so a failure can be localized. This bounds waiting; it does not
+establish a successful NPU run or a measured latency improvement on the phone.
+
 ## Experimental branch: audio8-npu-int4
 
 Version 4.4 integrates an experimental ORT/QNN bridge: CPU INT4 prefill, HTP INT4

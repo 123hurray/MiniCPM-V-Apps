@@ -1,12 +1,13 @@
 diff --git a/include/audiocpp.h b/include/audiocpp.h
-index e85ad9f..cc10fd6 100644
+index e85ad9f..813f723 100644
 --- a/include/audiocpp.h
 +++ b/include/audiocpp.h
-@@ -54,6 +54,15 @@ extern "C" {
+@@ -54,6 +54,16 @@ extern "C" {
  #define AUDIOCPP_ABI_VERSION_MINOR 2
  #define AUDIOCPP_ABI_VERSION_PATCH 0
  
 +/* Audio8 Android extension; controls apply only to the calling thread. */
++AUDIOCPP_API void audiocpp_audio8_progress(void (*progress)(const char *));
 +AUDIOCPP_API void audiocpp_audio8_mobile_options(int compact_head, int retain_graphs,
 +    int slow_threads, int fast_threads, int (*cancelled)(void *), void * user);
 +/* phase: 0=CPU prefill, 1=QNN slow decode, 2=fast codebook step. */
@@ -20,10 +21,10 @@ index e85ad9f..cc10fd6 100644
   * are added -- nothing is removed or changed -- so a caller needing a newer one
 diff --git a/include/engine/community_models/audio8_tts/mobile.h b/include/engine/community_models/audio8_tts/mobile.h
 new file mode 100644
-index 0000000..fe80bc9
+index 0000000..2ab0d4e
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,27 @@
 +#pragma once
 +#include <cstdint>
 +#include <stdexcept>
@@ -31,6 +32,7 @@ index 0000000..fe80bc9
 +namespace engine::models::audio8_tts {
 +// Synchronous per-calling-thread controls, never shared between sessions.
 +struct MobileOptions {
++    void (*progress)(const char *) = nullptr;
 +    int (*forward)(void *, int, const int32_t *, int64_t, int64_t, int64_t, int,
 +                   const float *, float *, int64_t, float *, int64_t) = nullptr;
 +    const char * (*forward_error)(void *) = nullptr;
@@ -82,15 +84,18 @@ index 0000000..9dddbef
 +}
 +}
 diff --git a/src/capi/audiocpp.cpp b/src/capi/audiocpp.cpp
-index 6915460..6f04288 100644
+index 6915460..14c8b6b 100644
 --- a/src/capi/audiocpp.cpp
 +++ b/src/capi/audiocpp.cpp
-@@ -13,6 +13,24 @@
+@@ -13,6 +13,27 @@
   */
  
  #include "audiocpp.h"
 +#include "engine/community_models/audio8_tts/mobile.h"
 +
++void audiocpp_audio8_progress(void (*progress)(const char *)) {
++    engine::models::audio8_tts::mobile_options.progress=progress;
++}
 +void audiocpp_audio8_external_forward(audiocpp_audio8_forward_fn forward,
 +    const char * (*error)(void *), void * user) {
 +    auto & m = engine::models::audio8_tts::mobile_options;
@@ -433,7 +438,7 @@ index 741fd02..4155cbf 100644
          ggml_backend_synchronize(backend_);
          if (status != GGML_STATUS_SUCCESS) {
 diff --git a/src/community_models/audio8_tts/generator.cpp b/src/community_models/audio8_tts/generator.cpp
-index a9fecf0..6548e42 100644
+index a9fecf0..d57336f 100644
 --- a/src/community_models/audio8_tts/generator.cpp
 +++ b/src/community_models/audio8_tts/generator.cpp
 @@ -1,4 +1,6 @@
@@ -443,11 +448,28 @@ index a9fecf0..6548e42 100644
  
  #include "engine/framework/debug/profiler.h"
  
-@@ -61,11 +63,18 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+@@ -30,6 +32,7 @@ Audio8TtsGenerator::Audio8TtsGenerator(
+ Audio8TtsGenerator::~Audio8TtsGenerator() = default;
+ 
+ Audio8TtsCodes Audio8TtsGenerator::encode_reference(const runtime::AudioBuffer & audio) {
++    if(mobile_options.progress) mobile_options.progress("编码参考音色");
+     auto codes = codec_->encode_reference(audio);
+     codec_->release_encode_graph();
+     return codes;
+@@ -53,6 +56,7 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+ 
+     const auto ar_start = Clock::now();
+     Audio8TtsGenerationResult result;
++    if(mobile_options.progress) mobile_options.progress("生成音频编码 · AR");
+     result.codes = ar_->generate(prompt, request.generation);
+     engine::debug::trace_log_scalar("audio8_tts.generated.frames", result.codes.frames);
+     engine::debug::trace_log_scalar("audio8_tts.generated.codebooks", result.codes.codebooks);
+@@ -61,11 +65,19 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
          engine::debug::elapsed_ms(ar_start, Clock::now()));
  
      const auto decode_start = Clock::now();
 +    mobile_check_cancelled();
++    if(mobile_options.progress) mobile_options.progress("解码音频 · CPU codec");
      result.audio = codec_->decode(result.codes);
      engine::debug::timing_log_scalar(
          "audio8_tts.codec_decode_ms",

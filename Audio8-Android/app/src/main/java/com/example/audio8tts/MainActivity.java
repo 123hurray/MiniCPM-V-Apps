@@ -12,6 +12,8 @@ import java.util.concurrent.*;
 
 public final class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService speechWorker=Executors.newSingleThreadExecutor();
+    private final Handler ui=new Handler(Looper.getMainLooper());
     private TextView status;
     private EditText text, referenceText;
     private Button download;
@@ -25,7 +27,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.4 · NPU 实验版"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 4.5"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Realistic-0.6B · SoC="+Build.SOC_MODEL+"\nCPU 基础模型约 1.43 GB，已有文件保留。NPU 另下载约 0.9 GB 模型，请预留至少 5 GB 空间。模型不在 APK 中。\nNPU 实验路径：主干解码 HTP INT4；预填充、codec 保留 CPU。Fast AR 可选 CPU INT4 / NPU。不是全模型 NPU。\n首次 NPU 编译可能需要数分钟，后续复用缓存。无法启动时会报错，不会静默改用 CPU。推理进程禁止新建互联网 socket；下载由独立界面进程完成。\n仍整段生成后播放，不随机拆段；停止在 AR 步间生效，不能中断单次加载或 codec 计算。语速和音调建议默认。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -34,7 +36,7 @@ public final class MainActivity extends Activity {
         CheckBox compact = option(root,"只计算有效语音词表（4096 + EOS）",perf.compact);
         CheckBox graphs = option(root,"保留计算图（减少重复构图，增加常驻内存）",perf.graphs);
         CheckBox affinity = option(root,"优先使用高频 CPU 核心",perf.affinity);
-        CheckBox prewarm = option(root,"选择引擎时后台预热（耗电，可被新请求取消）",perf.prewarm);
+        CheckBox prewarm = option(root,"自动预热已停用（避免阻塞试听）",false);prewarm.setEnabled(false);
         CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
         CheckBox npu = option(root,"启用主干 NPU INT4（SM8550 实验模式，需另下模型）",perf.npu);
         CheckBox fastNpu = option(root,"Fast AR 也用 NPU（可与 CPU INT4 对比）",perf.fastNpu);
@@ -48,7 +50,7 @@ public final class MainActivity extends Activity {
                 int n=Integer.parseInt(threads.getText().toString()), f=Integer.parseInt(fastThreads.getText().toString());
                 if(n<1 || n>8 || f<1 || f>8) throw new IllegalArgumentException("线程数需为 1～8");
                 PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f,npu.isChecked(),fastNpu.isChecked());
-                if(tts!=null)tts.stop();
+                speechWorker.execute(() -> {if(tts!=null)tts.stop();});
                 message("已保存，下次合成重载模型。若刚下载完 NPU 模型，请点下方重新连接系统引擎。");
             } catch(Exception e) { message("保存失败："+e.getMessage()); }
         });
@@ -61,8 +63,8 @@ public final class MainActivity extends Activity {
         });
         button(root,"恢复推荐优化设置", () -> {
             try {
-                PerformanceSettings.save(this,true,true,true,true,true,5,2,false,false);
-                compact.setChecked(true); graphs.setChecked(true); affinity.setChecked(true); prewarm.setChecked(true); cache.setChecked(true);
+                PerformanceSettings.save(this,true,true,true,false,true,5,2,false,false);
+                compact.setChecked(true); graphs.setChecked(true); affinity.setChecked(true); prewarm.setChecked(false); cache.setChecked(true);
                 npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐 CPU 优化设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
         });
@@ -101,12 +103,15 @@ public final class MainActivity extends Activity {
             worker.execute(() -> { try { ModelStore.download(this,this::message); } catch (Exception e) { ModelStore.log(this,"download_error " + e); message("下载失败：" + e.getMessage()); } finally { runOnUiThread(() -> download.setEnabled(true)); } });
         });
         text = new EditText(this); text.setHint("输入试听文本（最多 500 字）"); text.setText("你好，这是在手机本地运行的 Audio8 系统语音。"); root.addView(text);
-        button(root,"通过系统 TTS 接口试听", () -> {
+        Button preview=button(root,"试听", () -> {
             if (!ttsReady) { message("系统引擎初始化中，请稍后重试"); return; }
-            tts.setLanguage(Locale.SIMPLIFIED_CHINESE); tts.setSpeechRate(1f); tts.setPitch(1f);
-            if (tts.speak(text.getText().toString(), TextToSpeech.QUEUE_FLUSH, null, "preview") != TextToSpeech.SUCCESS) message("提交失败，请导出诊断");
+            String input=text.getText().toString();message("已提交，等待语音引擎");
+            speechWorker.execute(() -> {
+                tts.setLanguage(Locale.SIMPLIFIED_CHINESE);tts.setSpeechRate(1f);tts.setPitch(1f);
+                if(tts.speak(input,TextToSpeech.QUEUE_FLUSH,null,"preview")!=TextToSpeech.SUCCESS) message("提交失败，请重新连接引擎");
+            });
         });
-        button(root,"停止", () -> { if (tts != null) tts.stop(); });
+        Button stop=button(root,"停止", () -> {message("正在请求停止");speechWorker.execute(() -> {if(tts!=null)tts.stop();});});
         button(root,"检查系统 TTS 注册", () -> {
             Intent service = new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE).setPackage(getPackageName());
             var matches = getPackageManager().queryIntentServices(service, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
@@ -135,6 +140,37 @@ public final class MainActivity extends Activity {
             @Deprecated public void onError(String id) { message("合成失败，请导出诊断"); }
             public void onError(String id,int code) { message("合成失败，错误码=" + code + "；请导出诊断"); }
         });
+        arrangeHome(scroll,root,title,note,preview,stop);
+    }
+    private void arrangeHome(ScrollView scroll,LinearLayout root,TextView title,TextView note,Button preview,Button stop) {
+        LinearLayout home=new LinearLayout(this);home.setOrientation(LinearLayout.VERTICAL);home.setPadding(32,48,32,32);
+        for(android.view.View v:new android.view.View[]{title,status,text,preview,stop})root.removeView(v);
+        root.removeView(note);root.setPadding(0,0,0,0);
+        scroll.removeView(root);scroll.addView(home);home.addView(title);
+        TextView models=new TextView(this);home.addView(models);
+        TextView phase=new TextView(this);phase.setTextSize(18);phase.setPadding(0,24,0,24);home.addView(phase);
+        home.addView(status);home.addView(text);home.addView(preview);home.addView(stop);
+        button(home,"引擎无响应？重启语音进程",() -> {
+            sendBroadcast(new Intent(this,EngineControlReceiver.class));
+            message("已请求重启；模型保留。稍后点重新连接。");
+        });
+        button(home,"重新连接引擎",this::recreate);
+        Button expand=button(home,"模型、音色与高级设置 ▸",() -> {});
+        root.setVisibility(android.view.View.GONE);home.addView(root);
+        expand.setOnClickListener(v -> {
+            boolean open=root.getVisibility()==android.view.View.VISIBLE;
+            root.setVisibility(open?android.view.View.GONE:android.view.View.VISIBLE);
+            expand.setText(open?"模型、音色与高级设置 ▸":"收起高级设置 ▾");
+        });
+        TextView limits=new TextView(this);limits.setText("加载最长 4 分钟，合成最长 3 分钟。超时会结束语音进程，不删除模型。NPU 首次编译尚未真机验证。");root.addView(limits);
+        ui.post(new Runnable(){public void run(){
+            if(isDestroyed())return;
+            PerformanceSettings s=new PerformanceSettings(MainActivity.this);
+            models.setText((s.npu?"NPU INT4":"CPU")+" · 基础模型"+(ModelStore.ready(MainActivity.this)?"就绪":"未下载")+(s.npu?" · NPU模型"+(NpuModelStore.ready(MainActivity.this)?"就绪":"未下载"):""));
+            java.io.File a=new java.io.File(ModelStore.dir(MainActivity.this),"service-status.txt"),b=new java.io.File(ModelStore.dir(MainActivity.this),"native-status.txt");
+            phase.setText(RuntimeStatus.read(MainActivity.this,b.lastModified()>a.lastModified()?"native-status.txt":"service-status.txt"));
+            ui.postDelayed(this,1000);
+        }});
     }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
@@ -146,8 +182,8 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.4 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                        for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt"}) {
+                        out.write(("Audio8 4.5 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }
                         }
@@ -169,7 +205,11 @@ public final class MainActivity extends Activity {
             } catch (Exception e) { message(e.toString()); }
         });
     }
-    @Override public void onDestroy() { if (tts != null) { tts.stop(); tts.shutdown(); } worker.shutdown(); super.onDestroy(); }
+    @Override public void onDestroy() {
+        ui.removeCallbacksAndMessages(null);
+        speechWorker.execute(() -> {if(tts!=null){tts.stop();tts.shutdown();}});
+        speechWorker.shutdown();worker.shutdown();super.onDestroy();
+    }
     private CheckBox option(LinearLayout root,String label,boolean checked) {
         CheckBox box=new CheckBox(this); box.setText(label); box.setChecked(checked); root.addView(box); return box;
     }

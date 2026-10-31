@@ -11,7 +11,9 @@ import java.util.concurrent.atomic.*;
 
 public final class Audio8Service extends TextToSpeechService {
     private final AtomicLong generation=new AtomicLong();
-    private final AtomicBoolean warming=new AtomicBoolean();
+    private final ScheduledExecutorService watchdog=Executors.newSingleThreadScheduledExecutor();
+    private final AtomicLong operation=new AtomicLong();
+    private final AtomicBoolean inNative=new AtomicBoolean();
     private final ExecutorService warmer=Executors.newSingleThreadExecutor();
     private final Object lock=new Object();
     private final PcmCache cache=new PcmCache();
@@ -28,7 +30,7 @@ public final class Audio8Service extends TextToSpeechService {
     }
     @Override protected int onLoadLanguage(String lang,String country,String variant) {
         int status=onIsLanguageAvailable(lang,country,variant);
-        if (status>=0) { current=lang; scheduleWarmup(); } return status;
+        if (status>=0) current=lang; return status;
     }
     @Override public List<Voice> onGetVoices() {
         List<Voice> voices=new ArrayList<>();
@@ -42,19 +44,25 @@ public final class Audio8Service extends TextToSpeechService {
     @Override public int onIsValidVoiceName(String name) { return onGetVoices().stream().anyMatch(v -> v.getName().equals(name)) ? TextToSpeech.SUCCESS : TextToSpeech.ERROR; }
     @Override public int onLoadVoice(String name) {
         int status=modelsReady() ? onIsValidVoiceName(name) : TextToSpeech.ERROR;
-        if (status==TextToSpeech.SUCCESS) scheduleWarmup(); return status;
+        return status;
     }
     private void ensureEngine(PerformanceSettings s) {
-        if (engine!=0 && !engineKey.equals(s.engineKey())) { NativeEngine.close(engine); engine=0; cache.clear(); }
+        if (engine!=0 && !engineKey.equals(s.engineKey())) {
+            RuntimeStatus.write(this,"切换引擎，释放旧模型");armWatchdog(60,"旧模型释放超时");
+            NativeEngine.close(engine);engine=0;cache.clear();disarmWatchdog();
+        }
         if (engine==0) {
             long start=SystemClock.elapsedRealtime();
+            RuntimeStatus.write(this,"正在加载模型");
             if(s.npu && !android.os.Build.SOC_MODEL.toUpperCase(Locale.ROOT).contains("SM8550"))
                 throw new IllegalStateException("NPU 实验模型仅针对 SM8550；当前 SoC="+android.os.Build.SOC_MODEL);
             if(s.npu && !NpuModelStore.ready(this)) throw new IllegalStateException("请先在设置中下载 NPU INT4 模型");
+            armWatchdog(s.loadTimeout,"模型初始化超时");
             engine=NativeEngine.load(ModelStore.model(this).getPath(),s.threads,s.affinity,
                 s.npu?NpuModelStore.dir(this).getPath():"",getApplicationInfo().nativeLibraryDir,
                 s.npu?NpuModelStore.runtimeCache(this).getPath():"",s.fastThreads,s.fastNpu);
             engineKey=s.engineKey();
+            disarmWatchdog();
             ModelStore.log(this,"model_load_ms="+(SystemClock.elapsedRealtime()-start)+" config="+engineKey);
         }
     }
@@ -65,30 +73,31 @@ public final class Audio8Service extends TextToSpeechService {
         ModelStore.log(this,"threads="+threads+" fast_threads="+Math.min(threads,s.fastThreads)+" thermal="+thermal);
         return threads;
     }
-    private void scheduleWarmup() {
-        if (destroyed || !modelsReady() || !new PerformanceSettings(this).prewarm || !warming.compareAndSet(false,true)) return;
-        long ticket=generation.get();
-        warmer.execute(() -> {
-            try { synchronized(lock) {
-                if (destroyed || generation.get()!=ticket) return;
-                PerformanceSettings s=new PerformanceSettings(this);
-                if (engine!=0 && engineKey.equals(s.engineKey())) return;
-                ensureEngine(s);
-                if (generation.get()!=ticket || destroyed) return;
-                ModelStore.log(this,"warmup_begin");
-                NativeEngine.synthesize(engine,"你好。","","",100,100,s.compact,s.graphs,s.threads,s.fastThreads,s.affinity,new NativeEngine.Sink() {
-                    public boolean pcm(byte[] data) { return !cancelled(); }
-                    public boolean cancelled() { return destroyed || generation.get()!=ticket; }
-                });
-                ModelStore.log(this,"warmup_done");
-            } } catch (Throwable e) { ModelStore.log(this,"warmup_end "+e.getMessage()); }
-            finally { warming.set(false); }
-        });
+    private void armWatchdog(int seconds,String reason) {
+        long id=operation.incrementAndGet();inNative.set(true);
+        watchdog.schedule(() -> {
+            if(operation.get()!=id || !inNative.get()) return;
+            RuntimeStatus.write(this,reason+"；语音进程已结束，请重新连接引擎");
+            android.os.Process.killProcess(android.os.Process.myPid());
+        },seconds,TimeUnit.SECONDS);
     }
-    @Override protected void onStop() { generation.incrementAndGet(); }
+    private void disarmWatchdog() { inNative.set(false);operation.incrementAndGet(); }
+    @Override protected void onStop() {
+        generation.incrementAndGet();
+        if(inNative.get()) {
+            long id=operation.get();
+            RuntimeStatus.write(this,"正在停止；原生计算超过 15 秒未退出将重启语音进程");
+            watchdog.schedule(() -> {
+                if(operation.get()==id && inNative.get()) {
+                    RuntimeStatus.write(this,"停止超时；语音进程已结束，请重新连接引擎");
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                }
+            },15,TimeUnit.SECONDS);
+        }
+    }
     @Override protected void onSynthesizeText(SynthesisRequest request,SynthesisCallback callback) {
-        // Interrupt a background warmup before waiting for the native session lock.
         long ticket=generation.incrementAndGet(), start=SystemClock.elapsedRealtime();
+        RuntimeStatus.write(this,"请求已接收");
         synchronized(lock) {
             try {
                 if (destroyed || generation.get()!=ticket) return;
@@ -130,16 +139,21 @@ public final class Audio8Service extends TextToSpeechService {
                 if (hit!=null) { collect[0]=false; sink.pcm(hit); }
                 else {
                     int threads=activeThreads(s);
+                    RuntimeStatus.write(this,"正在生成语音");
+                    armWatchdog(s.synthesisTimeout,"语音合成超时");
                     NativeEngine.synthesize(engine,text,clone ? ref.getPath() : "",clone ? words : "",request.getSpeechRate(),request.getPitch(),s.compact,s.graphs,threads,Math.min(threads,s.fastThreads),s.affinity,sink);
+                    disarmWatchdog();
                 }
                 if (!sink.cancelled() && complete[0]) {
                     if (hit==null && collect[0]) cache.put(key,collected.toByteArray());
-                    callback.done(); ModelStore.log(this,"synthesis_done total_ms="+(SystemClock.elapsedRealtime()-start));
+                    callback.done(); RuntimeStatus.write(this,"合成已完成");ModelStore.log(this,"synthesis_done total_ms="+(SystemClock.elapsedRealtime()-start));
                 } else ModelStore.log(this,"synthesis_stopped total_ms="+(SystemClock.elapsedRealtime()-start));
                 releaseIfTrimRequested();
             } catch (Throwable e) {
+                disarmWatchdog();
                 if (destroyed || ticket!=generation.get()) { ModelStore.log(this,"synthesis_cancelled ms="+(SystemClock.elapsedRealtime()-start)); return; }
                 ModelStore.log(this,"synthesis_error "+android.util.Log.getStackTraceString(e));
+                RuntimeStatus.write(this,"合成失败："+e.getMessage());
                 callback.error(TextToSpeech.ERROR_SYNTHESIS);
                 if (engine!=0) { NativeEngine.close(engine); engine=0; }
             }
@@ -162,11 +176,13 @@ public final class Audio8Service extends TextToSpeechService {
         }
     }
     @Override public void onDestroy() {
-        destroyed=true; onStop(); warmer.shutdownNow(); super.onDestroy();
+        destroyed=true; onStop(); warmer.shutdownNow();super.onDestroy();
         // Do not block the main thread waiting for an uninterruptible codec kernel.
         new Thread(() -> { synchronized(lock) {
+            armWatchdog(60,"语音进程退出超时");
             if (engine!=0) { NativeEngine.close(engine); engine=0; }
             cache.clear();
+            disarmWatchdog();watchdog.shutdown();
         } },"audio8-release").start();
     }
 }

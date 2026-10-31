@@ -14,6 +14,7 @@
         <activity android:name=".SampleTextActivity" android:exported="true">
             <intent-filter><action android:name="android.speech.tts.engine.GET_SAMPLE_TEXT" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
         </activity>
+        <receiver android:name=".EngineControlReceiver" android:process=":synthesis" android:exported="false" />
         <service android:name=".Audio8Service" android:label="Audio8 离线语音" android:process=":synthesis" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.TTS_SERVICE" />

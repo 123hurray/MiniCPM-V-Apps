@@ -1,5 +1,6 @@
 #include "onnx_ar.h"
 #include "network_guard.h"
+#include "runtime_status.h"
 #include <onnxruntime_cxx_api.h>
 #include <algorithm>
 #include <array>
@@ -69,12 +70,16 @@ struct OnnxAr::Impl {
 
     Impl(const std::string & models,const std::string & libraries,const std::string & cache,int threads,int fast_threads,bool npu)
         : fast_npu(npu) {
+        audio8_stage("检查推理进程隔离");
         require_offline_synthesis_process();
         const std::string dsp=libraries+";/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp";
         if(setenv("ADSP_LIBRARY_PATH",dsp.c_str(),1)!=0) throw std::runtime_error("Cannot configure Qualcomm DSP library path");
+        audio8_stage("初始化 ONNX Runtime");
         env=Ort::Env(ORT_LOGGING_LEVEL_WARNING,"audio8-offline");
         env.DisableTelemetryEvents();
+        audio8_stage("注册 QNN 后端");
         env.RegisterExecutionProviderLibrary("QNNExecutionProvider",libraries+"/libonnxruntime_providers_qnn.so");
+        audio8_stage("查找 NPU 设备");
         for(auto device:env.GetEpDevices())
             if(std::string(device.EpName())=="QNNExecutionProvider" && device.Device().Type()==OrtHardwareDeviceType_NPU) devices.push_back(device);
         if(devices.empty()) throw std::runtime_error("QNN HTP device not found; NPU mode will not fall back to CPU");
@@ -102,12 +107,15 @@ struct OnnxAr::Impl {
                 {"htp_graph_finalization_optimization_mode","3"},
                 {"profiling_level","basic"},{"profiling_file_path",cache+"/qnn-"+name+".csv"}};
             options.AppendExecutionProvider_V2(env,devices,config);
+            audio8_stage(std::string(cached?"加载 NPU 缓存 · ":"编译 NPU 图 · ")+name);
             auto state=std::make_unique<State>(env,cached?context:models+"/"+name+"_static.onnx",options);
             std::fprintf(stderr,"Audio8 QNN initialized part=%s backend=HTP soc=43 arch=73 strict_no_cpu_fallback=1 cached_context=%d\n",name.c_str(),cached);
             return state;
         };
+        audio8_stage("加载 CPU INT4 预填充模型");
         prefill=std::make_unique<State>(env,models+"/slow_ar_int4.onnx",cpu_options(threads));
         slow=npu_state("slow");
+        audio8_stage("加载 Fast AR");
         fast=fast_npu?npu_state("fast"):std::make_unique<State>(env,models+"/fast_ar_int4.onnx",cpu_options(fast_threads));
         if(prefill->outputs.size()!=50 || slow->outputs.size()!=50 || fast->outputs.size()!=9)
             throw std::runtime_error("Audio8 ORT output count does not match pinned 24/4-layer model");
