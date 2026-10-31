@@ -1,5 +1,12 @@
 # Audio8 Android system TTS
 
+## Experimental branch: audio8-npu-int4
+
+This branch builds the NPU-targeted static INT4 model graphs separately. It does not
+yet integrate NPU inference into the Android application or produce a new NPU APK.
+See [the experimental build and validation boundary](docs/audio8-npu-int4.md).
+The Android sources below remain the 4.3 CPU baseline; the stable branch is unchanged.
+
 ## Version 4.3 — Snapdragon 8 Gen 2 CPU latency optimization
 
 - ARMv8.6-A FP16/dotprod/I8MM kernels and release LTO when supported. This build targets
