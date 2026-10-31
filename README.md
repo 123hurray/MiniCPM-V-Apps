@@ -2,10 +2,13 @@
 
 ## Experimental branch: audio8-npu-int4
 
-This branch builds the NPU-targeted static INT4 model graphs separately. It does not
-yet integrate NPU inference into the Android application or produce a new NPU APK.
-See [the experimental build and validation boundary](docs/audio8-npu-int4.md).
-The Android sources below remain the 4.3 CPU baseline; the stable branch is unchanged.
+Version 4.4 integrates an experimental ORT/QNN bridge: CPU INT4 prefill, HTP INT4
+single-token slow decode, configurable CPU INT4 / HTP fast decode, and the existing
+CPU codec. It is not an all-NPU or phone-validated engine. The workflow publishes
+separate downloadable models and binds their catalog hash into the APK. Model weights
+are not bundled. Existing GGUF and reference files are retained.
+See [setup, security constraints, and validation limits](docs/audio8-npu-int4.md).
+The stable `audio8-system-tts` branch remains unchanged.
 
 ## Version 4.3 — Snapdragon 8 Gen 2 CPU latency optimization
 

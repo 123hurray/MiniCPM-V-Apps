@@ -47,6 +47,7 @@ def main():
     args.output.mkdir(parents=True,exist_ok=True)
     if any(args.output.iterdir()): raise ValueError('Output directory must be empty')
     for name,digest in FILES.items(): download(args.inputs,name,digest)
+    for name in FILES: shutil.copyfile(args.inputs/name,args.output/name)
     for name in ('LICENSE','NOTICE','provenance.json','README.md'):
         download(args.inputs,name)
         shutil.copyfile(args.inputs/name,args.output/('SOURCE-'+name))
@@ -64,14 +65,18 @@ def main():
         'matmul_weights':'unchanged INT4','embeddings':'FP16 dequantization of source INT4 values',
         'prefill':'separate original CPU graph required',
         'codec':'not included in this build',
-        'build_status':'static_model_conversion_only',
-        'qnn_compilation_run_in_ci':False,'android_backend_integrated':False,
+        'build_status':'models_for_experimental_android_bridge_v4.4',
+        'qnn_compilation_run_in_ci':False,'android_backend':'experimental_v4.4',
         'on_device_validated':False,
         'validation_note':'Inference execution remains paused after a telemetry safety rejection; this build does not import ONNX Runtime or QNN.',
     }
     (args.output/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    catalog={'schema':1,'soc':'SM8550','files':[
+        {'name':file.name,'size':file.stat().st_size,'sha256':sha(file)}
+        for file in sorted(args.output.iterdir()) if file.is_file()]}
+    (args.output/'npu-catalog.json').write_text(json.dumps(catalog,indent=2)+'\n')
     files=sorted(p for p in args.output.iterdir() if p.is_file())
     (args.output/'SHA256SUMS').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in files))
-    print('Static model preparation complete. Not an Android NPU TTS APK.',flush=True)
+    print('Model preparation complete. Device inference remains unvalidated.',flush=True)
 
 if __name__=='__main__': main()

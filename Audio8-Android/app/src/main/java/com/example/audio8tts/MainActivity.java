@@ -25,9 +25,9 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.3"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.4 · NPU 实验版"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
-        note.setText("Audio8-TTS-Realistic-0.6B · Snapdragon 8 Gen 2 专用优化 / ARMv8.6 INT8\n首次下载约 1.43 GB；已有模型无需重下。有效语音词表投影、计算图复用、双线程配置、热状态保护和缓存均可配置。\n仍为整段合成后播放，不随机拆段。停止会在 AR 帧边界取消，但加载/预填充/codec 单次计算不能中断。\n语速和音调建议默认。为跨请求保持音色，请导入有权使用的参考 WAV 和准确文本。"); root.addView(note);
+        note.setText("Audio8-TTS-Realistic-0.6B · SoC="+Build.SOC_MODEL+"\nCPU 基础模型约 1.43 GB，已有文件保留。NPU 另下载约 0.9 GB 模型，请预留至少 5 GB 空间。模型不在 APK 中。\nNPU 实验路径：主干解码 HTP INT4；预填充、codec 保留 CPU。Fast AR 可选 CPU INT4 / NPU。不是全模型 NPU。\n首次 NPU 编译可能需要数分钟，后续复用缓存。无法启动时会报错，不会静默改用 CPU。推理进程禁止新建互联网 socket；下载由独立界面进程完成。\n仍整段生成后播放，不随机拆段；停止在 AR 步间生效，不能中断单次加载或 codec 计算。语速和音调建议默认。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
         PerformanceSettings perf = new PerformanceSettings(this);
         TextView perfTitle = new TextView(this); perfTitle.setText("性能设置（保存后下次请求生效；改变原生配置会重载模型）"); root.addView(perfTitle);
@@ -36,30 +36,47 @@ public final class MainActivity extends Activity {
         CheckBox affinity = option(root,"优先使用高频 CPU 核心",perf.affinity);
         CheckBox prewarm = option(root,"选择引擎时后台预热（耗电，可被新请求取消）",perf.prewarm);
         CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
+        CheckBox npu = option(root,"启用主干 NPU INT4（SM8550 实验模式，需另下模型）",perf.npu);
+        CheckBox fastNpu = option(root,"Fast AR 也用 NPU（可与 CPU INT4 对比）",perf.fastNpu);
+        fastNpu.setEnabled(npu.isChecked());
+        npu.setOnCheckedChangeListener((b,checked) -> fastNpu.setEnabled(checked));
+        TextView threadLabels = new TextView(this);threadLabels.setText("下方第一个数：CPU 主干/预填充与 codec 线程；第二个数：Fast AR CPU 线程。它们不是 NPU 核心数。");root.addView(threadLabels);
         EditText threads = new EditText(this); threads.setHint("主干 / codec 线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
         EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
         button(root,"保存性能设置", () -> {
             try {
                 int n=Integer.parseInt(threads.getText().toString()), f=Integer.parseInt(fastThreads.getText().toString());
                 if(n<1 || n>8 || f<1 || f>8) throw new IllegalArgumentException("线程数需为 1～8");
-                PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f);
-                message("已保存。建议对比主干 4/5、小模型 1/2 线程；诊断包含阶段耗时。");
+                PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f,npu.isChecked(),fastNpu.isChecked());
+                if(tts!=null)tts.stop();
+                message("已保存，下次合成重载模型。若刚下载完 NPU 模型，请点下方重新连接系统引擎。");
             } catch(Exception e) { message("保存失败："+e.getMessage()); }
         });
         button(root,"恢复 4.2 对照设置", () -> {
             try {
-                PerformanceSettings.save(this,false,false,false,false,false,5,5);
+                PerformanceSettings.save(this,false,false,false,false,false,5,5,false,false);
                 compact.setChecked(false); graphs.setChecked(false); affinity.setChecked(false); prewarm.setChecked(false); cache.setChecked(false);
-                threads.setText("5"); fastThreads.setText("5"); message("已保存算法对照设置；仍使用新版 ARM 内核和取消修复。");
+                npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("5"); message("已保存 CPU 对照设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
         });
         button(root,"恢复推荐优化设置", () -> {
             try {
-                PerformanceSettings.save(this,true,true,true,true,true,5,2);
+                PerformanceSettings.save(this,true,true,true,true,true,5,2,false,false);
                 compact.setChecked(true); graphs.setChecked(true); affinity.setChecked(true); prewarm.setChecked(true); cache.setChecked(true);
-                threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐优化设置。");
+                npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐 CPU 优化设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
         });
+        TextView npuStatus=new TextView(this);npuStatus.setText(NpuModelStore.ready(this)?"NPU 模型已就绪":"NPU 模型未下载");root.addView(npuStatus);
+        EditText npuOrigin=new EditText(this);npuOrigin.setSingleLine(true);npuOrigin.setText(NpuModelStore.origin(this));npuOrigin.setHint("NPU Release 下载基础地址，可填写 HTTPS 代理路径");root.addView(npuOrigin);
+        button(root,"下载 / 续传 NPU INT4 模型", () -> {
+            try { NpuModelStore.saveOrigin(this,npuOrigin.getText().toString()); }
+            catch(Exception e) { message(e.getMessage());return; }
+            worker.execute(() -> {
+                try { NpuModelStore.download(this,this::message);runOnUiThread(() -> npuStatus.setText("NPU 模型已就绪，请重新连接系统引擎")); }
+                catch(Exception e) { ModelStore.log(this,"npu_download_error "+e);message("NPU 下载失败："+e.getMessage()); }
+            });
+        });
+        button(root,"重新连接系统语音引擎", () -> recreate());
         TextView sourceNote = new TextView(this);
         sourceNote.setText("Hugging Face 下载域名（默认第三方 HF-Mirror，仅影响模型下载）\n切换源保留下载进度，文件仍校验固定 SHA-256。填写域名即可，无需模型路径或 Token。"); root.addView(sourceNote);
         EditText endpoint = new EditText(this); endpoint.setSingleLine(true);
@@ -129,10 +146,15 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.3 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.4 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }
+                        }
+                        File[] profiles=NpuModelStore.runtimeCache(this).listFiles((d,name)->name.endsWith(".csv"));
+                        if(profiles!=null) for(File file:profiles) {
+                            out.write(("\nQNN profile: "+file.getName()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                            try(InputStream in=new FileInputStream(file)) { out.write(in.readNBytes(2*1024*1024)); }
                         }
                         if (Build.VERSION.SDK_INT >= 30) {
                             ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);

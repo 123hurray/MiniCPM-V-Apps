@@ -21,9 +21,10 @@ public final class Audio8Service extends TextToSpeechService {
     private volatile boolean trimRequested;
     private static final List<Locale> LOCALES=List.of(Locale.SIMPLIFIED_CHINESE,Locale.US);
     @Override protected String[] onGetLanguage() { return new String[]{current,"",""}; }
+    private boolean modelsReady() { return ModelStore.ready(this) && (!new PerformanceSettings(this).npu || NpuModelStore.ready(this)); }
     @Override protected int onIsLanguageAvailable(String lang,String country,String variant) {
         if (!(lang.equals("zho") || lang.equals("chi") || lang.equals("zh") || lang.equals("eng") || lang.equals("en"))) return TextToSpeech.LANG_NOT_SUPPORTED;
-        return ModelStore.ready(this) ? TextToSpeech.LANG_AVAILABLE : TextToSpeech.LANG_MISSING_DATA;
+        return modelsReady() ? TextToSpeech.LANG_AVAILABLE : TextToSpeech.LANG_MISSING_DATA;
     }
     @Override protected int onLoadLanguage(String lang,String country,String variant) {
         int status=onIsLanguageAvailable(lang,country,variant);
@@ -40,14 +41,19 @@ public final class Audio8Service extends TextToSpeechService {
     }
     @Override public int onIsValidVoiceName(String name) { return onGetVoices().stream().anyMatch(v -> v.getName().equals(name)) ? TextToSpeech.SUCCESS : TextToSpeech.ERROR; }
     @Override public int onLoadVoice(String name) {
-        int status=ModelStore.ready(this) ? onIsValidVoiceName(name) : TextToSpeech.ERROR;
+        int status=modelsReady() ? onIsValidVoiceName(name) : TextToSpeech.ERROR;
         if (status==TextToSpeech.SUCCESS) scheduleWarmup(); return status;
     }
     private void ensureEngine(PerformanceSettings s) {
         if (engine!=0 && !engineKey.equals(s.engineKey())) { NativeEngine.close(engine); engine=0; cache.clear(); }
         if (engine==0) {
             long start=SystemClock.elapsedRealtime();
-            engine=NativeEngine.load(ModelStore.model(this).getPath(),s.threads,s.affinity);
+            if(s.npu && !android.os.Build.SOC_MODEL.toUpperCase(Locale.ROOT).contains("SM8550"))
+                throw new IllegalStateException("NPU 实验模型仅针对 SM8550；当前 SoC="+android.os.Build.SOC_MODEL);
+            if(s.npu && !NpuModelStore.ready(this)) throw new IllegalStateException("请先在设置中下载 NPU INT4 模型");
+            engine=NativeEngine.load(ModelStore.model(this).getPath(),s.threads,s.affinity,
+                s.npu?NpuModelStore.dir(this).getPath():"",getApplicationInfo().nativeLibraryDir,
+                s.npu?NpuModelStore.runtimeCache(this).getPath():"",s.fastThreads,s.fastNpu);
             engineKey=s.engineKey();
             ModelStore.log(this,"model_load_ms="+(SystemClock.elapsedRealtime()-start)+" config="+engineKey);
         }
@@ -60,7 +66,7 @@ public final class Audio8Service extends TextToSpeechService {
         return threads;
     }
     private void scheduleWarmup() {
-        if (destroyed || !ModelStore.ready(this) || !new PerformanceSettings(this).prewarm || !warming.compareAndSet(false,true)) return;
+        if (destroyed || !modelsReady() || !new PerformanceSettings(this).prewarm || !warming.compareAndSet(false,true)) return;
         long ticket=generation.get();
         warmer.execute(() -> {
             try { synchronized(lock) {
@@ -87,7 +93,7 @@ public final class Audio8Service extends TextToSpeechService {
             try {
                 if (destroyed || generation.get()!=ticket) return;
                 releaseIfTrimRequested();
-                if (!ModelStore.ready(this)) { callback.error(TextToSpeech.ERROR_NOT_INSTALLED_YET); return; }
+                if (!modelsReady()) { callback.error(TextToSpeech.ERROR_NOT_INSTALLED_YET); return; }
                 if (onIsLanguageAvailable(request.getLanguage(),request.getCountry(),request.getVariant())<0) { callback.error(TextToSpeech.ERROR_INVALID_REQUEST); return; }
                 String text=request.getCharSequenceText().toString().strip();
                 if (text.isEmpty() || text.codePointCount(0,text.length())>500) { callback.error(TextToSpeech.ERROR_INVALID_REQUEST); return; }

@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <audiocpp.h>
+#include "onnx_ar.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -37,10 +38,17 @@ std::string quote(const std::string& s) {
 void check(audiocpp_status status) { if(status!=AUDIOCPP_OK) throw std::runtime_error(audiocpp_last_error()); }
 void fail(JNIEnv* e,const std::exception& x) { if(!e->ExceptionCheck()) e->ThrowNew(e->FindClass("java/lang/IllegalStateException"),x.what()); }
 struct Engine {
+    std::unique_ptr<OnnxAr> ar;
     audiocpp_registry* registry=nullptr;
     audiocpp_model* model=nullptr;
     audiocpp_session* session=nullptr;
     ~Engine(){ audiocpp_session_free(session); audiocpp_model_free(model); audiocpp_registry_free(registry); }
+};
+struct ExternalScope {
+    explicit ExternalScope(OnnxAr * ar) {
+        audiocpp_audio8_external_forward(ar?OnnxAr::forward:nullptr,ar?OnnxAr::error:nullptr,ar);
+    }
+    ~ExternalScope() { audiocpp_audio8_external_forward(nullptr,nullptr,nullptr); }
 };
 struct AffinityScope {
     cpu_set_t previous{}; bool changed=false;
@@ -73,7 +81,7 @@ struct MobileScope {
     ~MobileScope(){audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
 };
 }
-extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity) {
+extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu) {
     try {
         std::string file=utf8(e,path);
         std::string log=file.substr(0,file.find_last_of('/'))+"/diagnostics-native.txt";
@@ -81,6 +89,9 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         if(fd>=0){dup2(fd,STDERR_FILENO);close(fd);setvbuf(stderr,nullptr,_IONBF,0);}
         AffinityScope affinityScope(affinity);
         auto h=std::make_unique<Engine>();
+        const std::string npu=utf8(e,npuModels);
+        if(!npu.empty()) h->ar=std::make_unique<OnnxAr>(npu,utf8(e,libraries),utf8(e,cache),int(threads),int(fastThreads),bool(fastNpu));
+        ExternalScope external(h->ar.get());
         check(audiocpp_registry_create(nullptr,&h->registry));
         audiocpp_model_config config{"audio8_tts",nullptr,nullptr,nullptr};
         check(audiocpp_model_load(h->registry,file.c_str(),&config,nullptr,&h->model));
@@ -93,6 +104,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jboolean affinity,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
+        ExternalScope external(h->ar.get());
         AffinityScope affinityScope(affinity);
         MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8));
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);
@@ -108,6 +120,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthe
         }
         audiocpp_result* raw=nullptr;
         check(audiocpp_session_run(h->session,request.get(),&raw));
+        if(h->ar) h->ar->summary();
         std::unique_ptr<audiocpp_result,decltype(&audiocpp_result_free)> result(raw,audiocpp_result_free);
         const float* samples=nullptr; size_t frames=0; int sampleRate=0,channels=0;
         check(audiocpp_result_audio(result.get(),&samples,&frames,&sampleRate,&channels));

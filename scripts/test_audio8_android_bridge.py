@@ -1,0 +1,72 @@
+"""Source/contract checks only: never load ORT or QNN on the build host."""
+from pathlib import Path
+import re
+import unittest
+
+ROOT=Path(__file__).resolve().parents[1]
+CPP=ROOT/'Audio8-Android/app/src/main/cpp'
+JAVA=ROOT/'Audio8-Android/app/src/main/java/com/example/audio8tts'
+
+class AndroidBridgeTests(unittest.TestCase):
+    def test_npu_placement_and_fail_closed(self):
+        source=(CPP/'onnx_ar.cpp').read_text()
+        self.assertLess(source.index('require_offline_synthesis_process();'),source.index('env=Ort::Env'))
+        self.assertLess(source.index('env.DisableTelemetryEvents();'),source.index('env.RegisterExecutionProviderLibrary'))
+        self.assertIn('"session.disable_cpu_ep_fallback","1"',source)
+        self.assertIn('OrtHardwareDeviceType_NPU',source)
+        self.assertNotIn('enable_htp_prepare_only',source)
+        self.assertIn('float_data(outputs[0]',source)
+        self.assertIn('half_data(outputs[1]',source)
+        self.assertIn('prefill=CPU_INT4 slow_decode=QNN_HTP_INT4',source)
+
+    def test_callback_bound_for_load_and_synthesis(self):
+        source=(CPP/'audio8_jni.cpp').read_text()
+        self.assertEqual(source.count('ExternalScope external(h->ar.get());'),2)
+        self.assertIn('OnnxAr::forward',source)
+        self.assertIn('audiocpp_audio8_external_forward(nullptr,nullptr,nullptr)',source)
+        patch=(ROOT/'scripts/audio8-mobile.patch').read_text()
+        self.assertIn('if (mobile_options.forward) return generate_external(prompt, options);',patch)
+        self.assertIn('External Audio8 AR callback is not bound',patch)
+
+    def test_catalog_is_pinned_and_no_path_traversal(self):
+        source=(JAVA/'NpuModelStore.java').read_text()
+        self.assertIn('hash(bytes).equals(BuildConfig.NPU_MANIFEST_SHA256)',source)
+        self.assertIn('REQUIRED.contains(name)',source)
+        self.assertIn('found.containsAll(REQUIRED)',source)
+        self.assertIn('hash(part).equals(e.hash())',source)
+        self.assertIn('DownloadEndpoint.matchesRange',source)
+        self.assertIn('uri.getRawUserInfo()!=null',source)
+
+    def test_synthesis_process_is_separate(self):
+        manifest=(ROOT/'Audio8-Android/app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('android:process=":synthesis"',manifest)
+        self.assertIn('android.intent.category.DEFAULT',manifest)
+
+    def test_network_bpf_instructions(self):
+        source=(CPP/'network_guard.h').read_text()
+        body=source.split('sock_filter rules[] = {',1)[1].split('};',1)[0]
+        actual=re.sub(r'\s+','',body)
+        expected='''
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,arch)),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,AUDIT_ARCH_AARCH64,1,0),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EPERM),
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(seccomp_data,nr)),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,__NR_socket,0,4),
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(seccomp_data,args[0])),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,AF_INET,1,0),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,AF_INET6,0,1),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EPERM),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+        '''
+        self.assertEqual(actual,re.sub(r'\s+','',expected))
+        self.assertIn('SECCOMP_FILTER_FLAG_TSYNC',source)
+        # Simulate the verified branches; do not install a filter on the host.
+        def allows(arm64,syscall,family):
+            if not arm64:return False
+            if syscall!='socket':return True
+            return family not in ('AF_INET','AF_INET6')
+        for family in ('AF_INET','AF_INET6'):self.assertFalse(allows(True,'socket',family))
+        self.assertTrue(allows(True,'socket','AF_UNIX'))
+        self.assertTrue(allows(True,'ioctl','unused'))
+
+if __name__=='__main__':unittest.main(verbosity=2)

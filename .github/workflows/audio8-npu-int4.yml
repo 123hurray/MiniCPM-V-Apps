@@ -10,8 +10,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   static-models:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      catalog_sha: ${{ steps.catalog.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,12 +26,31 @@ jobs:
       - name: Install conversion-only dependencies
         run: python -m pip install -r scripts/requirements-audio8-npu.txt
       - name: Test graph rewrites without an inference runtime
-        run: python scripts/test_audio8_qnn_model.py
+        run: |
+          python scripts/test_audio8_qnn_model.py
+          python scripts/test_audio8_android_bridge.py
       - name: Prepare pinned Realistic INT4 graphs
         run: python scripts/build_audio8_npu_models.py --inputs "$RUNNER_TEMP/audio8-source" --output "$RUNNER_TEMP/audio8-static-models"
       - name: Verify generated artifact hashes
         working-directory: ${{ runner.temp }}/audio8-static-models
         run: sha256sum -c SHA256SUMS
+      - name: Bind the APK to this exact model catalog
+        id: catalog
+        run: |
+          value=$(sha256sum "$RUNNER_TEMP/audio8-static-models/npu-catalog.json" | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$value" >> "$GITHUB_OUTPUT"
+      - name: Publish separately downloadable model assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: audio8-sm8550-int4-v1
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release download "$TAG" --pattern npu-catalog.json --output "$RUNNER_TEMP/published-catalog.json"
+            cmp "$RUNNER_TEMP/published-catalog.json" "$RUNNER_TEMP/audio8-static-models/npu-catalog.json"
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease --title 'Audio8 SM8550 INT4 experimental models v1' --notes 'Independent Realistic INT4 export adapted for fixed-capacity SM8550 decode. Requires the experimental Audio8 Android v4.4 adapter. Model and phone quality/performance remain unvalidated. Includes original license and provenance. These files are not an APK.'
+            gh release upload "$TAG" "$RUNNER_TEMP/audio8-static-models/"*
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: Audio8-SM8550-static-INT4-models
@@ -39,4 +62,10 @@ jobs:
         run: |
           echo '### Static model build only' >> "$GITHUB_STEP_SUMMARY"
           echo 'INT4 MatMul weights preserved; embedding lookup dequantized to FP16; fixed-capacity masked KV decode.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'No ONNX Runtime/QNN inference executed. No Android NPU integration or device performance validation is claimed. No new APK is produced.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No ONNX Runtime/QNN inference executed in CI. The dependent job builds the experimental Android bridge; device validation is still required.' >> "$GITHUB_STEP_SUMMARY"
+  android-apk:
+    needs: static-models
+    uses: ./.github/workflows/audio8-system-tts.yml
+    with:
+      npu_catalog_sha: ${{ needs.static-models.outputs.catalog_sha }}
+    secrets: inherit
