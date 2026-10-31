@@ -10,7 +10,11 @@ android {
         versionCode = 36
         versionName = "4.0"
         ndk { abiFilters += "arm64-v8a" }
-        externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3") } }
+        externalNativeBuild { cmake {
+            cppFlags += listOf("-std=c++17", "-O3")
+            arguments += "-DANDROID_STL=c++_shared"
+            targets += listOf("audio8_jni", "audiocpp")
+        } }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     buildTypes { release { isMinifyEnabled = false } }

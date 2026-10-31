@@ -85,7 +85,7 @@ public final class MainActivity extends Activity {
                             }
                         }
                     }
-                    message("诊断已导出；包含设备和错误信息，不包含试听文本");
+                    message("诊断已导出；可能包含文件路径及运行时数据，分享前请检查");
                 }
             } catch (Exception e) { message(e.toString()); }
         });
