@@ -96,7 +96,7 @@ index 6915460..fecc2e6 100644
  #include "engine/framework/runtime/task_vocabulary.h"
  
 diff --git a/src/community_models/audio8_tts/ar.cpp b/src/community_models/audio8_tts/ar.cpp
-index ce70887..a7cc5a7 100644
+index ce70887..678d814 100644
 --- a/src/community_models/audio8_tts/ar.cpp
 +++ b/src/community_models/audio8_tts/ar.cpp
 @@ -1,4 +1,6 @@
@@ -106,7 +106,15 @@ index ce70887..a7cc5a7 100644
  
  #include "falcon_kv_cache.h"
  
-@@ -769,6 +771,42 @@ struct ArkttsCausalDecoderOutputs {
+@@ -21,6 +23,7 @@
+ 
+ #include <algorithm>
+ #include <chrono>
++#include <cstdio>
+ #include <cmath>
+ #include <cstring>
+ #include <limits>
+@@ -769,6 +772,42 @@ struct ArkttsCausalDecoderOutputs {
      modules::DecoderStackState state;
  };
  
@@ -149,7 +157,7 @@ index ce70887..a7cc5a7 100644
  ArkttsCausalDecoderOutputs build_arktts_causal_decoder(
      core::ModuleBuildContext & ctx,
      core::ConstantTensorCache & constants,
-@@ -795,8 +833,8 @@ ArkttsCausalDecoderOutputs build_arktts_causal_decoder(
+@@ -795,8 +834,8 @@ ArkttsCausalDecoderOutputs build_arktts_causal_decoder(
      const int64_t steps = hidden_sequence.shape.dims[1];
      auto fast_hidden_source = norm_fastlayer_input ? hidden_sequence : x;
      auto hidden = modules::SliceModule({1, steps - 1, 1}).build(ctx, fast_hidden_source);
@@ -160,7 +168,7 @@ index ce70887..a7cc5a7 100644
      auto hidden_out = core::wrap_tensor(ggml_dup(ctx.ggml, hidden.tensor), hidden.shape, hidden.type);
      auto logits_out = core::wrap_tensor(ggml_dup(ctx.ggml, logits.tensor), logits.shape, logits.type);
      return {hidden_out, logits_out, std::move(state)};
-@@ -843,13 +881,7 @@ ArkttsStaticDecoderOutputs build_arktts_static_decoder(
+@@ -843,13 +882,7 @@ ArkttsStaticDecoderOutputs build_arktts_static_decoder(
      }
      auto hidden = modules::RMSNormModule({config.stack.hidden_size, config.stack.rms_norm_eps, true, false})
                        .build(ctx, x, weights.final_norm);
@@ -175,7 +183,7 @@ index ce70887..a7cc5a7 100644
      auto fast_hidden = norm_fastlayer_input ? hidden : x;
      runtime::TransformerKVCacheOptions cache_options;
      cache_options.allow_bf16_storage = !cache_keys.empty() && cache_keys.front().type == GGML_TYPE_BF16;
-@@ -2300,6 +2332,10 @@ public:
+@@ -2300,6 +2333,10 @@ public:
      Audio8TtsCodes generate(const Audio8TtsPrompt & prompt, const Audio8TtsGenerationOptions & options) {
          ArkttsARProfile profile;
          const auto & assets = runtime_->assets();
@@ -186,7 +194,7 @@ index ce70887..a7cc5a7 100644
          const auto & weights = runtime_->weights();
          const bool is_falcon = assets.config.text.slow_backbone == "falcon_h1" ||
                                 assets.model_weights->has_tensor("slow.embed_tokens.weight");
-@@ -2403,8 +2439,8 @@ public:
+@@ -2403,8 +2440,8 @@ public:
          if (max_new_tokens <= 0) {
              throw std::runtime_error("Audio8 TTS prompt leaves no room for generated tokens");
          }
@@ -197,7 +205,7 @@ index ce70887..a7cc5a7 100644
          ensure_step_graph(prompt.steps + max_new_tokens, profile);
          ensure_prefill_graph(prompt.steps, profile);
          ensure_fast_graph(profile);
-@@ -2428,6 +2464,7 @@ public:
+@@ -2428,6 +2465,7 @@ public:
          step_graph_->finish_prefill(prompt.steps);
          bool ended_by_im_end = false;
          for (int64_t step = 1; step < max_new_tokens; ++step) {
@@ -205,7 +213,7 @@ index ce70887..a7cc5a7 100644
              timing_start = Clock::now();
              const auto input = build_slow_embedding_for_frame(assets.config, weights, frame);
              profile.slow_embedding_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
-@@ -2565,7 +2602,7 @@ private:
+@@ -2565,7 +2603,7 @@ private:
              auto timing_start = Clock::now();
              ggml_backend_tensor_set(input_, embeddings.data(), 0, embeddings.size() * sizeof(float));
              profile.prefill_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
@@ -214,7 +222,7 @@ index ce70887..a7cc5a7 100644
              timing_start = Clock::now();
              const ggml_status status = core::compute_backend_graph(runtime_->backend(), graph_, nullptr, "audio8_tts.ar.prefill");
              ggml_backend_synchronize(runtime_->backend());
-@@ -2574,10 +2611,9 @@ private:
+@@ -2574,10 +2612,9 @@ private:
                  throw std::runtime_error("Audio8 TTS AR prefill graph compute failed");
              }
              SlowPrefillOutput out;
@@ -226,7 +234,7 @@ index ce70887..a7cc5a7 100644
              ggml_backend_tensor_get(hidden_, out.forward.hidden.data(), 0, out.forward.hidden.size() * sizeof(float));
              profile.prefill_output_read_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
              return out;
-@@ -2753,7 +2789,7 @@ private:
+@@ -2753,7 +2790,7 @@ private:
              timing_start = Clock::now();
              ggml_backend_tensor_set(input_, embedding.data(), 0, embedding.size() * sizeof(float));
              profile.step_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
@@ -235,7 +243,7 @@ index ce70887..a7cc5a7 100644
              timing_start = Clock::now();
              const ggml_status status = core::compute_backend_graph(runtime_->backend(), graph_, nullptr, "audio8_tts.ar.step");
              ggml_backend_synchronize(runtime_->backend());
-@@ -2763,10 +2799,9 @@ private:
+@@ -2763,10 +2800,9 @@ private:
              }
              cache_.advance_after_direct_append(1);
              SlowForwardOutput out;
@@ -247,7 +255,7 @@ index ce70887..a7cc5a7 100644
              ggml_backend_tensor_get(hidden_, out.hidden.data(), 0, out.hidden.size() * sizeof(float));
              profile.step_output_read_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
              return out;
-@@ -2928,7 +2963,9 @@ private:
+@@ -2928,7 +2964,9 @@ private:
              timing_start = Clock::now();
              ggml_backend_tensor_set(input_, input.data(), 0, input.size() * sizeof(float));
              profile.fast_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
@@ -258,6 +266,18 @@ index ce70887..a7cc5a7 100644
              timing_start = Clock::now();
              const ggml_status status = core::compute_backend_graph(runtime_->fast_backend(), graph_, nullptr, "audio8_tts.ar.fast");
              ggml_backend_synchronize(runtime_->fast_backend());
+@@ -3068,6 +3106,11 @@ private:
+     }
+ 
+     void log_profile(const ArkttsARProfile & profile) const {
++        std::fprintf(stderr, "Audio8 AR compact=%d slow_ms=%.2f fast_ms=%.2f sample_ms=%.2f build_ms=%.2f frames=%lld fast_calls=%lld\n",
++            mobile_options.compact_head, profile.prefill_graph_ms + profile.step_graph_ms,
++            profile.fast_graph_ms, profile.sample_main_ms + profile.sample_high_ms + profile.sample_fast_ms,
++            profile.graph_build_prefill_ms + profile.graph_build_step_ms + profile.graph_build_fast_ms,
++            static_cast<long long>(profile.generated_frames), static_cast<long long>(profile.fast_runs));
+         engine::debug::timing_log_scalar("audio8_tts.ar.profile.graph_build_prefill_ms", profile.graph_build_prefill_ms);
+         engine::debug::timing_log_scalar("audio8_tts.ar.profile.graph_build_step_ms", profile.graph_build_step_ms);
+         engine::debug::timing_log_scalar("audio8_tts.ar.profile.graph_build_fast_ms", profile.graph_build_fast_ms);
 diff --git a/src/community_models/audio8_tts/codec.cpp b/src/community_models/audio8_tts/codec.cpp
 index 741fd02..4155cbf 100644
 --- a/src/community_models/audio8_tts/codec.cpp

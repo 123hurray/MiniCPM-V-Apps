@@ -18,6 +18,7 @@ public final class Audio8Service extends TextToSpeechService {
     private long engine;
     private String engineKey="", current="zho";
     private volatile boolean destroyed;
+    private volatile boolean trimRequested;
     private static final List<Locale> LOCALES=List.of(Locale.SIMPLIFIED_CHINESE,Locale.US);
     @Override protected String[] onGetLanguage() { return new String[]{current,"",""}; }
     @Override protected int onIsLanguageAvailable(String lang,String country,String variant) {
@@ -85,6 +86,7 @@ public final class Audio8Service extends TextToSpeechService {
         synchronized(lock) {
             try {
                 if (destroyed || generation.get()!=ticket) return;
+                releaseIfTrimRequested();
                 if (!ModelStore.ready(this)) { callback.error(TextToSpeech.ERROR_NOT_INSTALLED_YET); return; }
                 if (onIsLanguageAvailable(request.getLanguage(),request.getCountry(),request.getVariant())<0) { callback.error(TextToSpeech.ERROR_INVALID_REQUEST); return; }
                 String text=request.getCharSequenceText().toString().strip();
@@ -128,12 +130,27 @@ public final class Audio8Service extends TextToSpeechService {
                     if (hit==null && collect[0]) cache.put(key,collected.toByteArray());
                     callback.done(); ModelStore.log(this,"synthesis_done total_ms="+(SystemClock.elapsedRealtime()-start));
                 } else ModelStore.log(this,"synthesis_stopped total_ms="+(SystemClock.elapsedRealtime()-start));
+                releaseIfTrimRequested();
             } catch (Throwable e) {
                 if (destroyed || ticket!=generation.get()) { ModelStore.log(this,"synthesis_cancelled ms="+(SystemClock.elapsedRealtime()-start)); return; }
                 ModelStore.log(this,"synthesis_error "+android.util.Log.getStackTraceString(e));
                 callback.error(TextToSpeech.ERROR_SYNTHESIS);
                 if (engine!=0) { NativeEngine.close(engine); engine=0; }
             }
+        }
+    }
+    private void releaseIfTrimRequested() {
+        if (!trimRequested) return;
+        trimRequested=false; cache.clear();
+        if (engine!=0) { NativeEngine.close(engine); engine=0; }
+        ModelStore.log(this,"memory_pressure_released_idle_session");
+    }
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            trimRequested=true;
+            try { warmer.execute(() -> { synchronized(lock) { releaseIfTrimRequested(); } }); }
+            catch (RejectedExecutionException ignored) { }
         }
     }
     @Override public void onDestroy() {
