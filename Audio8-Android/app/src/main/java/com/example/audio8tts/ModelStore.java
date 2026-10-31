@@ -25,10 +25,10 @@ final class ModelStore {
             w.write(java.time.Instant.now() + " " + message + "\n"); w.flush();
         } catch (IOException ignored) { }
     }
-    static String text(File file) throws IOException { return Files.readString(file.toPath(), StandardCharsets.UTF_8); }
+    static String text(File file) throws IOException { return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8); }
     static void saveText(File file, String value) throws IOException {
         File tmp = new File(file.getPath() + ".tmp");
-        Files.writeString(tmp.toPath(), value, StandardCharsets.UTF_8);
+        Files.write(tmp.toPath(), value.getBytes(StandardCharsets.UTF_8));
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
     static void importReference(Context c, Uri uri) throws IOException {
