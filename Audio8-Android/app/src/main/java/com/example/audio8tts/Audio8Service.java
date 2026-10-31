@@ -147,7 +147,9 @@ public final class Audio8Service extends TextToSpeechService {
     }
     @Override public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+        if (level==android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+            level==android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ||
+            level>=android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
             trimRequested=true;
             try { warmer.execute(() -> { synchronized(lock) { releaseIfTrimRequested(); } }); }
             catch (RejectedExecutionException ignored) { }
