@@ -7,8 +7,8 @@ android {
         applicationId = "com.example.audio8tts"
         minSdk = 33
         targetSdk = 36
-        versionCode = 38
-        versionName = "4.2"
+        versionCode = 39
+        versionName = "4.3"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild { cmake {
             cppFlags += listOf("-std=c++17", "-O3")

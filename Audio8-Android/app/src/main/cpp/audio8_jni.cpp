@@ -11,6 +11,9 @@
 #include <vector>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sched.h>
+#include <fstream>
+#include <chrono>
 
 namespace {
 std::string utf8(JNIEnv* e, jstring v) {
@@ -39,13 +42,44 @@ struct Engine {
     audiocpp_session* session=nullptr;
     ~Engine(){ audiocpp_session_free(session); audiocpp_model_free(model); audiocpp_registry_free(registry); }
 };
+struct AffinityScope {
+    cpu_set_t previous{}; bool changed=false;
+    explicit AffinityScope(bool enabled) {
+        if (!enabled || sched_getaffinity(0,sizeof(previous),&previous)) return;
+        std::vector<std::pair<long,int>> cores;
+        for(int i=0;i<CPU_SETSIZE;i++) if(CPU_ISSET(i,&previous)) {
+            long freq=0; std::ifstream f("/sys/devices/system/cpu/cpu"+std::to_string(i)+"/cpufreq/cpuinfo_max_freq"); f>>freq;
+            if(freq>0) cores.emplace_back(freq,i);
+        }
+        if(cores.size()<4) return;
+        std::sort(cores.rbegin(),cores.rend()); cpu_set_t selected; CPU_ZERO(&selected);
+        for(size_t i=0;i<std::min<size_t>(5,cores.size());i++) CPU_SET(cores[i].second,&selected);
+        changed=sched_setaffinity(0,sizeof(selected),&selected)==0;
+        fprintf(stderr,"Audio8 affinity enabled=%d candidates=%zu\n",changed,cores.size());
+    }
+    ~AffinityScope(){if(changed) sched_setaffinity(0,sizeof(previous),&previous);}
+};
+struct MobileScope {
+    JNIEnv * env; jobject sink; jmethodID cancelled;
+    MobileScope(JNIEnv * e,jobject s,bool compact,bool graphs,int slow,int fast)
+        :env(e),sink(s) {
+        jclass cls=e->GetObjectClass(s); cancelled=e->GetMethodID(cls,"cancelled","()Z"); e->DeleteLocalRef(cls);
+        if(!cancelled) throw std::runtime_error("Cancellation callback missing");
+        audiocpp_audio8_mobile_options(compact,graphs,slow,fast,[](void * p){
+            auto * self=static_cast<MobileScope*>(p);
+            return int(self->env->ExceptionCheck() || self->env->CallBooleanMethod(self->sink,self->cancelled));
+        },this);
+    }
+    ~MobileScope(){audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
+};
 }
-extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads) {
+extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity) {
     try {
         std::string file=utf8(e,path);
         std::string log=file.substr(0,file.find_last_of('/'))+"/diagnostics-native.txt";
         int fd=open(log.c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
         if(fd>=0){dup2(fd,STDERR_FILENO);close(fd);setvbuf(stderr,nullptr,_IONBF,0);}
+        AffinityScope affinityScope(affinity);
         auto h=std::make_unique<Engine>();
         check(audiocpp_registry_create(nullptr,&h->registry));
         audiocpp_model_config config{"audio8_tts",nullptr,nullptr,nullptr};
@@ -56,9 +90,11 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
     } catch(const std::exception& x) { fail(e,x);return 0; }
 }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(JNIEnv*,jclass,jlong handle) { delete reinterpret_cast<Engine*>(handle); }
-extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jobject sink) {
+extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jboolean affinity,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
+        AffinityScope affinityScope(affinity);
+        MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8));
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);
         if (!request) throw std::bad_alloc();
         std::string input=utf8(e,text),reference=utf8(e,ref),words=utf8(e,transcript);

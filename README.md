@@ -1,5 +1,39 @@
 # Audio8 Android system TTS
 
+## Version 4.3 — Snapdragon 8 Gen 2 CPU latency optimization
+
+- ARMv8.6-A FP16/dotprod/I8MM kernels and release LTO when supported. This build targets
+  SM8550; it is not a portable ARMv8.2 APK.
+- Project only the model-metadata semantic token rows and EOS (4096+1 instead of the
+  full 155776-token head). Input embeddings remain intact; original token IDs, EOS,
+  top-k/top-p/RAS and seed remain unchanged. Unsupported shapes fall back to the full head.
+- Reuse the prefill graph only while both shape and target KV allocation match; reuse
+  the single codec capacity graph. Turning graph retention off restores release-after-use.
+- Independently configurable slow/codec and fast AR threads (default 5/2); optional
+  affinity to the five highest-frequency allowed cores, discovered from sysfs instead
+  of hard-coded CPU IDs. Severe thermal state caps active slow threads to 3.
+- Background model/short-utterance warmup when selecting a voice; a real request cancels
+  warmup at an AR frame boundary. Native cancellation between AR frames and fast steps.
+- LRU PCM cache in the synthesis process, bounded to 16 MiB / 32 entries / 4 MiB per
+  utterance. Keys include text, voice/reference, transcript, rate/pitch and native settings.
+  Speech and PCM are not persisted. Settings use atomic files so the separate synthesis
+  process sees changes without stale SharedPreferences.
+- Phase timings and first PCM / total / cache hit / threads / thermal state diagnostics.
+  UI exposes all switches and baseline/recommended presets. Changing native settings
+  reloads the session on the next request; it does not mutate an existing graph's shape.
+
+These are implemented optimizations, not measured SM8550 speedup claims. CI tests compare
+F32 and Q8 full/compact projection at batch 1 and 4 (including EOS mapping), cancellation,
+PCM cache LRU/limits, source+merged TTS manifests, Android Java/native compilation and lint.
+On-device end-to-end audio quality, peak PSS and latency still need measurement.
+
+Not silently enabled: INT4 changes the quantization/quality tradeoff; the available LiteRT
+export is Preview rather than this Realistic model. QNN/HTP needs a new supported static
+quantized graph export and calibration. Existing GGUF CPU graphs do not become NPU graphs
+through a build flag. Vulkan/codec correctness is not validated for this app on Adreno 740.
+The current build deliberately remains CPU-only. Real streaming codec state is not implemented;
+no independent text chunking or overlapping-window approximation is used to hide latency.
+
 Version 4.2 fixes engine discovery: the TTS service filter now declares
 `android.intent.category.DEFAULT`, required by Android TtsEngines' use of
 `PackageManager.MATCH_DEFAULT_ONLY`. Source and merged manifests are checked in CI.
@@ -20,7 +54,7 @@ Audio8-TTS-Realistic-0.6B engine. Other branches are unchanged. No model is bund
 
 ## Scope
 
-- Android 13+, arm64, ARMv8.2-A dot-product; aimed at Snapdragon 8 Gen 2.
+- Android 13+, arm64, ARMv8.6-A FP16/dot-product/I8MM; aimed at Snapdragon 8 Gen 2.
 - Standalone application ID `com.example.audio8tts`, coexists with the old app.
 - Android `TextToSpeechService`, Chinese/English advertised initially, offline synthesis.
 - Pinned audio.cpp CPU backend; no untested GPU switch.
@@ -35,8 +69,9 @@ Cloud compilation is not proof of audible output, quality, memory safety, or rea
 performance on the phone. Validate on an SM8550 before production use.
 Current upstream synthesis completes an utterance before returning PCM. A request is never
 split independently to work around OOM. Requests over 500 Unicode code points fail explicitly.
-Stopping suppresses subsequent PCM immediately, but cannot abort an in-flight native compute;
-the next request waits for that compute. Independent pitch control/time-stretch is not implemented;
+Stopping suppresses subsequent PCM immediately and cancels at the next AR/fast-AR boundary.
+Model loading, prefill and one in-flight codec compute remain non-interruptible.
+Independent pitch control/time-stretch is not implemented;
 speech rate uses resampling and changes pitch. Use default 100/100 settings for natural output.
 Reference-free output is not guaranteed to preserve the same speaker across requests.
 Not yet suitable for low-latency screen-reader navigation.
@@ -45,6 +80,8 @@ Not yet suitable for low-latency screen-reader navigation.
 
 Run `bash scripts/prepare-runtime.sh`, then `cd Audio8-Android && bash gradlew :app:assembleRelease`.
 Runtime is pinned to `3a0dd44293fc706f5c375ec96d3e6fd9c54b6c45`.
+`scripts/audio8-mobile.patch` applies the audited mobile changes to that exact revision;
+the setup fails instead of guessing if the patch no longer applies. It is idempotent.
 The dedicated GitHub Actions workflow builds on pushes to `audio8-system-tts`.
 Only `audio8_tts` is selected in the native model composite.
 

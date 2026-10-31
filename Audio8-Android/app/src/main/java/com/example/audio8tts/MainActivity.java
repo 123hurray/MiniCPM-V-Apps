@@ -25,10 +25,41 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.2"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 系统语音 · 4.3"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
-        note.setText("Audio8-TTS-Realistic-0.6B · 本地 CPU / ARM64\n首次下载约 1.43 GB，至少预留 3 GB 存储。无需 root。下载后可在系统文字转语音设置中选择本引擎。\n实验版：每次请求整段合成后播放，不是低延迟帧流式；单次最多 500 字，不截断、不随机拆段。停止立即丢弃播放，当前原生计算完成后才能处理下一条。\n建议系统语速和音调保持默认；当前语速使用重采样，不能独立保留音调。为跨请求保持音色，请导入你有权使用的参考 WAV 和准确文本。"); root.addView(note);
+        note.setText("Audio8-TTS-Realistic-0.6B · Snapdragon 8 Gen 2 专用优化 / ARMv8.6 INT8\n首次下载约 1.43 GB；已有模型无需重下。有效语音词表投影、计算图复用、双线程配置、热状态保护和缓存均可配置。\n仍为整段合成后播放，不随机拆段。停止会在 AR 帧边界取消，但加载/预填充/codec 单次计算不能中断。\n语速和音调建议默认。为跨请求保持音色，请导入有权使用的参考 WAV 和准确文本。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
+        PerformanceSettings perf = new PerformanceSettings(this);
+        TextView perfTitle = new TextView(this); perfTitle.setText("性能设置（保存后下次请求生效；改变原生配置会重载模型）"); root.addView(perfTitle);
+        CheckBox compact = option(root,"只计算有效语音词表（4096 + EOS）",perf.compact);
+        CheckBox graphs = option(root,"保留计算图（减少重复构图，增加常驻内存）",perf.graphs);
+        CheckBox affinity = option(root,"优先使用高频 CPU 核心",perf.affinity);
+        CheckBox prewarm = option(root,"选择引擎时后台预热（耗电，可被新请求取消）",perf.prewarm);
+        CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
+        EditText threads = new EditText(this); threads.setHint("主干 / codec 线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
+        EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
+        button(root,"保存性能设置", () -> {
+            try {
+                int n=Integer.parseInt(threads.getText().toString()), f=Integer.parseInt(fastThreads.getText().toString());
+                if(n<1 || n>8 || f<1 || f>8) throw new IllegalArgumentException("线程数需为 1～8");
+                PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f);
+                message("已保存。建议对比主干 4/5、小模型 1/2 线程；诊断包含阶段耗时。");
+            } catch(Exception e) { message("保存失败："+e.getMessage()); }
+        });
+        button(root,"恢复 4.2 对照设置", () -> {
+            try {
+                PerformanceSettings.save(this,false,false,false,false,false,5,5);
+                compact.setChecked(false); graphs.setChecked(false); affinity.setChecked(false); prewarm.setChecked(false); cache.setChecked(false);
+                threads.setText("5"); fastThreads.setText("5"); message("已保存算法对照设置；仍使用新版 ARM 内核和取消修复。");
+            } catch(Exception e) { message(e.getMessage()); }
+        });
+        button(root,"恢复推荐优化设置", () -> {
+            try {
+                PerformanceSettings.save(this,true,true,true,true,true,5,2);
+                compact.setChecked(true); graphs.setChecked(true); affinity.setChecked(true); prewarm.setChecked(true); cache.setChecked(true);
+                threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐优化设置。");
+            } catch(Exception e) { message(e.getMessage()); }
+        });
         TextView sourceNote = new TextView(this);
         sourceNote.setText("Hugging Face 下载域名（默认第三方 HF-Mirror，仅影响模型下载）\n切换源保留下载进度，文件仍校验固定 SHA-256。填写域名即可，无需模型路径或 Token。"); root.addView(sourceNote);
         EditText endpoint = new EditText(this); endpoint.setSingleLine(true);
@@ -98,7 +129,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.2 " + Build.MANUFACTURER + " " + Build.MODEL + " SDK=" + Build.VERSION.SDK_INT + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.3 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }
@@ -117,4 +148,7 @@ public final class MainActivity extends Activity {
         });
     }
     @Override public void onDestroy() { if (tts != null) { tts.stop(); tts.shutdown(); } worker.shutdown(); super.onDestroy(); }
+    private CheckBox option(LinearLayout root,String label,boolean checked) {
+        CheckBox box=new CheckBox(this); box.setText(label); box.setChecked(checked); root.addView(box); return box;
+    }
 }

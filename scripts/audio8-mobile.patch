@@ -1,0 +1,323 @@
+diff --git a/include/audiocpp.h b/include/audiocpp.h
+index e85ad9f..40ab079 100644
+--- a/include/audiocpp.h
++++ b/include/audiocpp.h
+@@ -54,6 +54,10 @@ extern "C" {
+ #define AUDIOCPP_ABI_VERSION_MINOR 2
+ #define AUDIOCPP_ABI_VERSION_PATCH 0
+ 
++/* Audio8 Android extension; controls apply only to the calling thread. */
++AUDIOCPP_API void audiocpp_audio8_mobile_options(int compact_head, int retain_graphs,
++    int slow_threads, int fast_threads, int (*cancelled)(void *), void * user);
++
+ /* Packed as (major << 16) | (minor << 8) | patch. A caller built against a
+  * different MAJOR must not use the library. MINOR increments when entry points
+  * are added -- nothing is removed or changed -- so a caller needing a newer one
+diff --git a/include/engine/community_models/audio8_tts/mobile.h b/include/engine/community_models/audio8_tts/mobile.h
+new file mode 100644
+index 0000000..8e54fd4
+--- /dev/null
++++ b/include/engine/community_models/audio8_tts/mobile.h
+@@ -0,0 +1,22 @@
++#pragma once
++#include <cstdint>
++#include <stdexcept>
++
++namespace engine::models::audio8_tts {
++// Synchronous per-calling-thread controls, never shared between sessions.
++struct MobileOptions {
++    bool compact_head = false;
++    bool retain_graphs = false;
++    int fast_threads = 0;
++    int slow_threads = 0;
++    int (*cancelled)(void *) = nullptr;
++    void * user = nullptr;
++    int64_t semantic_start = 0, semantic_end = -1, eos = -1;
++};
++inline thread_local MobileOptions mobile_options;
++inline int mobile_slow_threads(int fallback) { return mobile_options.slow_threads > 0 ? mobile_options.slow_threads : fallback; }
++inline void mobile_check_cancelled() {
++    if (mobile_options.cancelled && mobile_options.cancelled(mobile_options.user))
++        throw std::runtime_error("Audio8 synthesis cancelled");
++}
++}
+diff --git a/include/engine/community_models/audio8_tts/mobile_math.h b/include/engine/community_models/audio8_tts/mobile_math.h
+new file mode 100644
+index 0000000..9dddbef
+--- /dev/null
++++ b/include/engine/community_models/audio8_tts/mobile_math.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include <ggml.h>
++#include <algorithm>
++#include <limits>
++#include <stdexcept>
++#include <vector>
++
++namespace engine::models::audio8_tts {
++inline ggml_tensor * mobile_head_rows(ggml_context * ctx, ggml_tensor * w, int64_t first, int64_t rows) {
++    if (first < 0 || rows <= 0 || first > w->ne[1] - rows)
++        throw std::runtime_error("Audio8 compact head row range invalid");
++    return ggml_view_2d(ctx, w, w->ne[0], rows, w->nb[1], static_cast<size_t>(first) * w->nb[1]);
++}
++inline std::vector<float> mobile_expand_logits(const std::vector<float> & values,
++    int64_t vocab, int64_t begin, int64_t end, int64_t eos) {
++    if (values.size() == static_cast<size_t>(vocab)) return values;
++    if (begin < 0 || end < begin || end >= vocab || eos < 0 || eos >= vocab ||
++        (eos >= begin && eos <= end) || values.size() != static_cast<size_t>(end - begin + 2))
++        throw std::runtime_error("Audio8 compact output shape mismatch");
++    std::vector<float> full(static_cast<size_t>(vocab), -std::numeric_limits<float>::infinity());
++    std::copy_n(values.begin(), end - begin + 1, full.begin() + begin);
++    full[static_cast<size_t>(eos)] = values.back();
++    return full;
++}
++}
+diff --git a/src/capi/audiocpp.cpp b/src/capi/audiocpp.cpp
+index 6915460..fecc2e6 100644
+--- a/src/capi/audiocpp.cpp
++++ b/src/capi/audiocpp.cpp
+@@ -13,6 +13,18 @@
+  */
+ 
+ #include "audiocpp.h"
++#include "engine/community_models/audio8_tts/mobile.h"
++
++void audiocpp_audio8_mobile_options(int compact, int retain, int slow, int fast,
++                                  int (*cancelled)(void *), void * user) {
++    auto & m = engine::models::audio8_tts::mobile_options;
++    m.compact_head = compact != 0;
++    m.retain_graphs = retain != 0;
++    m.fast_threads = fast;
++    m.slow_threads = slow;
++    m.cancelled = cancelled;
++    m.user = user;
++}
+ 
+ #include "engine/framework/runtime/task_vocabulary.h"
+ 
+diff --git a/src/community_models/audio8_tts/ar.cpp b/src/community_models/audio8_tts/ar.cpp
+index ce70887..a7cc5a7 100644
+--- a/src/community_models/audio8_tts/ar.cpp
++++ b/src/community_models/audio8_tts/ar.cpp
+@@ -1,4 +1,6 @@
+ #include "engine/community_models/audio8_tts/ar.h"
++#include "engine/community_models/audio8_tts/mobile.h"
++#include "engine/community_models/audio8_tts/mobile_math.h"
+ 
+ #include "falcon_kv_cache.h"
+ 
+@@ -769,6 +771,42 @@ struct ArkttsCausalDecoderOutputs {
+     modules::DecoderStackState state;
+ };
+ 
++core::TensorValue mobile_output_head(core::ModuleBuildContext & ctx,
++    const core::TensorValue & input, const modules::LinearWeights & weights,
++    const modules::CausalDecoderConfig & config) {
++    const auto & m = mobile_options;
++    auto * w = weights.weight.tensor;
++    const int64_t count = m.semantic_end - m.semantic_start + 1;
++    if (!m.compact_head || config.use_lm_head_bias || config.logits_size < 100000 ||
++        m.semantic_start < 0 || count != 4096 || m.semantic_end >= config.logits_size ||
++        m.eos < 0 || m.eos >= config.logits_size ||
++        (m.eos >= m.semantic_start && m.eos <= m.semantic_end) ||
++        w->ne[0] != config.stack.hidden_size || w->ne[1] != config.logits_size) {
++        return modules::LinearModule({config.stack.hidden_size, config.logits_size,
++            config.use_lm_head_bias, config.lm_head_precision}).build(ctx, input, weights);
++    }
++    // Views select rows, not columns: Q8 blocks and original token IDs stay unchanged.
++    auto project = [&](int64_t first, int64_t rows) {
++        auto * view = mobile_head_rows(ctx.ggml, w, first, rows);
++        modules::LinearWeights slice{core::wrap_tensor(view,
++            core::TensorShape::from_dims({rows, config.stack.hidden_size}), weights.weight.type), std::nullopt};
++        return modules::LinearModule({config.stack.hidden_size, rows, false,
++            config.lm_head_precision}).build(ctx, input, slice);
++    };
++    auto semantic = project(m.semantic_start, count);
++    auto eos = project(m.eos, 1);
++    return core::wrap_tensor(ggml_concat(ctx.ggml, semantic.tensor, eos.tensor, 0),
++        input.shape.with_last_dim(count + 1), GGML_TYPE_F32);
++}
++
++std::vector<float> mobile_read_logits(ggml_tensor * tensor, int64_t vocab) {
++    const size_t n = static_cast<size_t>(ggml_nelements(tensor));
++    std::vector<float> compact(n);
++    ggml_backend_tensor_get(tensor, compact.data(), 0, n * sizeof(float));
++    const auto & m = mobile_options;
++    return mobile_expand_logits(compact, vocab, m.semantic_start, m.semantic_end, m.eos);
++}
++
+ ArkttsCausalDecoderOutputs build_arktts_causal_decoder(
+     core::ModuleBuildContext & ctx,
+     core::ConstantTensorCache & constants,
+@@ -795,8 +833,8 @@ ArkttsCausalDecoderOutputs build_arktts_causal_decoder(
+     const int64_t steps = hidden_sequence.shape.dims[1];
+     auto fast_hidden_source = norm_fastlayer_input ? hidden_sequence : x;
+     auto hidden = modules::SliceModule({1, steps - 1, 1}).build(ctx, fast_hidden_source);
+-    auto logits = modules::LinearModule({config.stack.hidden_size, config.logits_size, false, config.lm_head_precision})
+-                      .build(ctx, modules::SliceModule({1, steps - 1, 1}).build(ctx, hidden_sequence), weights.lm_head);
++    auto logits = mobile_output_head(ctx,
++        modules::SliceModule({1, steps - 1, 1}).build(ctx, hidden_sequence), weights.lm_head, config);
+     auto hidden_out = core::wrap_tensor(ggml_dup(ctx.ggml, hidden.tensor), hidden.shape, hidden.type);
+     auto logits_out = core::wrap_tensor(ggml_dup(ctx.ggml, logits.tensor), logits.shape, logits.type);
+     return {hidden_out, logits_out, std::move(state)};
+@@ -843,13 +881,7 @@ ArkttsStaticDecoderOutputs build_arktts_static_decoder(
+     }
+     auto hidden = modules::RMSNormModule({config.stack.hidden_size, config.stack.rms_norm_eps, true, false})
+                       .build(ctx, x, weights.final_norm);
+-    const auto logits = modules::LinearModule({
+-                            config.stack.hidden_size,
+-                            config.logits_size,
+-                            config.use_lm_head_bias,
+-                            config.lm_head_precision,
+-                        })
+-                            .build(ctx, hidden, weights.lm_head);
++    const auto logits = mobile_output_head(ctx, hidden, weights.lm_head, config);
+     auto fast_hidden = norm_fastlayer_input ? hidden : x;
+     runtime::TransformerKVCacheOptions cache_options;
+     cache_options.allow_bf16_storage = !cache_keys.empty() && cache_keys.front().type == GGML_TYPE_BF16;
+@@ -2300,6 +2332,10 @@ public:
+     Audio8TtsCodes generate(const Audio8TtsPrompt & prompt, const Audio8TtsGenerationOptions & options) {
+         ArkttsARProfile profile;
+         const auto & assets = runtime_->assets();
++        mobile_options.semantic_start = assets.config.semantic_start_token_id;
++        mobile_options.semantic_end = assets.config.semantic_end_token_id;
++        mobile_options.eos = assets.config.im_end_token_id;
++        mobile_check_cancelled();
+         const auto & weights = runtime_->weights();
+         const bool is_falcon = assets.config.text.slow_backbone == "falcon_h1" ||
+                                assets.model_weights->has_tensor("slow.embed_tokens.weight");
+@@ -2403,8 +2439,8 @@ public:
+         if (max_new_tokens <= 0) {
+             throw std::runtime_error("Audio8 TTS prompt leaves no room for generated tokens");
+         }
+-        // Prefill writes into the reusable step KV cache; rebuild the copy graph for each request.
+-        prefill_graph_.reset();
++        // Rebuild only if dimensions or the target KV allocation change.
++        if (!mobile_options.retain_graphs) prefill_graph_.reset();
+         ensure_step_graph(prompt.steps + max_new_tokens, profile);
+         ensure_prefill_graph(prompt.steps, profile);
+         ensure_fast_graph(profile);
+@@ -2428,6 +2464,7 @@ public:
+         step_graph_->finish_prefill(prompt.steps);
+         bool ended_by_im_end = false;
+         for (int64_t step = 1; step < max_new_tokens; ++step) {
++            mobile_check_cancelled();
+             timing_start = Clock::now();
+             const auto input = build_slow_embedding_for_frame(assets.config, weights, frame);
+             profile.slow_embedding_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+@@ -2565,7 +2602,7 @@ private:
+             auto timing_start = Clock::now();
+             ggml_backend_tensor_set(input_, embeddings.data(), 0, embeddings.size() * sizeof(float));
+             profile.prefill_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+-            core::set_backend_threads(runtime_->backend(), runtime_->threads());
++            core::set_backend_threads(runtime_->backend(), mobile_slow_threads(runtime_->threads()));
+             timing_start = Clock::now();
+             const ggml_status status = core::compute_backend_graph(runtime_->backend(), graph_, nullptr, "audio8_tts.ar.prefill");
+             ggml_backend_synchronize(runtime_->backend());
+@@ -2574,10 +2611,9 @@ private:
+                 throw std::runtime_error("Audio8 TTS AR prefill graph compute failed");
+             }
+             SlowPrefillOutput out;
+-            out.forward.logits.resize(static_cast<size_t>(config.vocab_size));
+             out.forward.hidden.resize(static_cast<size_t>(config.dim));
+             timing_start = Clock::now();
+-            ggml_backend_tensor_get(logits_, out.forward.logits.data(), 0, out.forward.logits.size() * sizeof(float));
++            out.forward.logits = mobile_read_logits(logits_, config.vocab_size);
+             ggml_backend_tensor_get(hidden_, out.forward.hidden.data(), 0, out.forward.hidden.size() * sizeof(float));
+             profile.prefill_output_read_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+             return out;
+@@ -2753,7 +2789,7 @@ private:
+             timing_start = Clock::now();
+             ggml_backend_tensor_set(input_, embedding.data(), 0, embedding.size() * sizeof(float));
+             profile.step_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+-            core::set_backend_threads(runtime_->backend(), runtime_->threads());
++            core::set_backend_threads(runtime_->backend(), mobile_slow_threads(runtime_->threads()));
+             timing_start = Clock::now();
+             const ggml_status status = core::compute_backend_graph(runtime_->backend(), graph_, nullptr, "audio8_tts.ar.step");
+             ggml_backend_synchronize(runtime_->backend());
+@@ -2763,10 +2799,9 @@ private:
+             }
+             cache_.advance_after_direct_append(1);
+             SlowForwardOutput out;
+-            out.logits.resize(static_cast<size_t>(config.vocab_size));
+             out.hidden.resize(static_cast<size_t>(config.dim));
+             timing_start = Clock::now();
+-            ggml_backend_tensor_get(logits_, out.logits.data(), 0, out.logits.size() * sizeof(float));
++            out.logits = mobile_read_logits(logits_, config.vocab_size);
+             ggml_backend_tensor_get(hidden_, out.hidden.data(), 0, out.hidden.size() * sizeof(float));
+             profile.step_output_read_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+             return out;
+@@ -2928,7 +2963,9 @@ private:
+             timing_start = Clock::now();
+             ggml_backend_tensor_set(input_, input.data(), 0, input.size() * sizeof(float));
+             profile.fast_input_upload_ms += engine::debug::elapsed_ms(timing_start, Clock::now());
+-            core::set_backend_threads(runtime_->fast_backend(), runtime_->threads());
++            mobile_check_cancelled();
++            core::set_backend_threads(runtime_->fast_backend(),
++                mobile_options.fast_threads > 0 ? mobile_options.fast_threads : runtime_->threads());
+             timing_start = Clock::now();
+             const ggml_status status = core::compute_backend_graph(runtime_->fast_backend(), graph_, nullptr, "audio8_tts.ar.fast");
+             ggml_backend_synchronize(runtime_->fast_backend());
+diff --git a/src/community_models/audio8_tts/codec.cpp b/src/community_models/audio8_tts/codec.cpp
+index 741fd02..4155cbf 100644
+--- a/src/community_models/audio8_tts/codec.cpp
++++ b/src/community_models/audio8_tts/codec.cpp
+@@ -1,6 +1,7 @@
+ #include <cstdlib>
+ 
+ #include "engine/community_models/audio8_tts/codec.h"
++#include "engine/community_models/audio8_tts/mobile.h"
+ 
+ #include "engine/framework/audio/conversion.h"
+ #include "engine/framework/audio/resampling.h"
+@@ -1088,7 +1089,8 @@ struct DecodeGraph {
+             }
+             core::write_tensor_i32(code_inputs_[static_cast<size_t>(codebook)], padded);
+         }
+-        core::set_backend_threads(backend_, threads_);
++        mobile_check_cancelled();
++        core::set_backend_threads(backend_, mobile_slow_threads(threads_));
+         const auto compute_start = std::chrono::steady_clock::now();
+         const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
+         ggml_backend_synchronize(backend_);
+@@ -1186,7 +1188,8 @@ struct EncodeGraph {
+         }
+         mono.resize(static_cast<size_t>(sample_capacity_), 0.0F);
+         core::write_tensor_f32(input_, mono);
+-        core::set_backend_threads(backend_, threads_);
++        mobile_check_cancelled();
++        core::set_backend_threads(backend_, mobile_slow_threads(threads_));
+         const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
+         ggml_backend_synchronize(backend_);
+         if (status != GGML_STATUS_SUCCESS) {
+diff --git a/src/community_models/audio8_tts/generator.cpp b/src/community_models/audio8_tts/generator.cpp
+index a9fecf0..6548e42 100644
+--- a/src/community_models/audio8_tts/generator.cpp
++++ b/src/community_models/audio8_tts/generator.cpp
+@@ -1,4 +1,6 @@
+ #include "engine/community_models/audio8_tts/generator.h"
++#include "engine/community_models/audio8_tts/mobile.h"
++#include <cstdio>
+ 
+ #include "engine/framework/debug/profiler.h"
+ 
+@@ -61,11 +63,18 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+         engine::debug::elapsed_ms(ar_start, Clock::now()));
+ 
+     const auto decode_start = Clock::now();
++    mobile_check_cancelled();
+     result.audio = codec_->decode(result.codes);
+     engine::debug::timing_log_scalar(
+         "audio8_tts.codec_decode_ms",
+         engine::debug::elapsed_ms(decode_start, Clock::now()));
+-    codec_->release_runtime_graphs();
++    std::fprintf(stderr, "Audio8 timings prompt_ms=%.2f ar_ms=%.2f codec_ms=%.2f frames=%lld\n",
++        engine::debug::elapsed_ms(prompt_start, ar_start),
++        engine::debug::elapsed_ms(ar_start, decode_start),
++        engine::debug::elapsed_ms(decode_start, Clock::now()),
++        static_cast<long long>(result.codes.frames));
++    mobile_check_cancelled();
++    if (!mobile_options.retain_graphs) codec_->release_runtime_graphs();
+     if (mem_saver) {
+         ar_->release_runtime_graphs();
+     }
