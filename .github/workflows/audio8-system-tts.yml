@@ -43,7 +43,7 @@ jobs:
       - name: Prepare unsigned signing inputs
         run: |
           mkdir -p out
-          cache=$(rg --files --hidden Audio8-Android/app/.cxx | rg '/arm64-v8a/CMakeCache.txt$' | head -n 1)
+          cache=$(rg --files --hidden --no-ignore Audio8-Android/app/.cxx | rg '/arm64-v8a/CMakeCache.txt$' | head -n 1)
           native_dir=$(dirname "$cache")
           cp "$native_dir/audio8-optimization.txt" out/native-optimization-config.txt
           grep -F 'arm_arch=armv8.6-a+dotprod+fp16+i8mm' out/native-optimization-config.txt
