@@ -1,13 +1,14 @@
 diff --git a/include/audiocpp.h b/include/audiocpp.h
-index e85ad9f..813f723 100644
+index e85ad9f..579a7a1 100644
 --- a/include/audiocpp.h
 +++ b/include/audiocpp.h
-@@ -54,6 +54,16 @@ extern "C" {
+@@ -54,6 +54,17 @@ extern "C" {
  #define AUDIOCPP_ABI_VERSION_MINOR 2
  #define AUDIOCPP_ABI_VERSION_PATCH 0
  
 +/* Audio8 Android extension; controls apply only to the calling thread. */
 +AUDIOCPP_API void audiocpp_audio8_progress(void (*progress)(const char *));
++AUDIOCPP_API void audiocpp_audio8_codec_options(int threads,int optimized);
 +AUDIOCPP_API void audiocpp_audio8_mobile_options(int compact_head, int retain_graphs,
 +    int slow_threads, int fast_threads, int (*cancelled)(void *), void * user);
 +/* phase: 0=CPU prefill, 1=QNN slow decode, 2=fast codebook step. */
@@ -21,10 +22,10 @@ index e85ad9f..813f723 100644
   * are added -- nothing is removed or changed -- so a caller needing a newer one
 diff --git a/include/engine/community_models/audio8_tts/mobile.h b/include/engine/community_models/audio8_tts/mobile.h
 new file mode 100644
-index 0000000..2ab0d4e
+index 0000000..d2cbf9f
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +#include <cstdint>
 +#include <stdexcept>
@@ -41,15 +42,77 @@ index 0000000..2ab0d4e
 +    bool retain_graphs = false;
 +    int fast_threads = 0;
 +    int slow_threads = 0;
++    int codec_threads = 0;
++    bool codec_optimized = false;
 +    int (*cancelled)(void *) = nullptr;
 +    void * user = nullptr;
 +    int64_t semantic_start = 0, semantic_end = -1, eos = -1;
 +};
 +inline thread_local MobileOptions mobile_options;
 +inline int mobile_slow_threads(int fallback) { return mobile_options.slow_threads > 0 ? mobile_options.slow_threads : fallback; }
++inline int mobile_codec_threads(int fallback) { return mobile_options.codec_threads > 0 ? mobile_options.codec_threads : mobile_slow_threads(fallback); }
 +inline void mobile_check_cancelled() {
 +    if (mobile_options.cancelled && mobile_options.cancelled(mobile_options.user))
 +        throw std::runtime_error("Audio8 synthesis cancelled");
++}
++}
+diff --git a/include/engine/community_models/audio8_tts/mobile_codec.h b/include/engine/community_models/audio8_tts/mobile_codec.h
+new file mode 100644
+index 0000000..c6f5722
+--- /dev/null
++++ b/include/engine/community_models/audio8_tts/mobile_codec.h
+@@ -0,0 +1,53 @@
++#pragma once
++#include <ggml.h>
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <stdexcept>
++
++namespace engine::models::audio8_tts {
++inline void mobile_col2im(ggml_tensor * dst,int ith,int nth,void * userdata) {
++    const auto * columns=dst->src[0];
++    const int stride=static_cast<int>(reinterpret_cast<intptr_t>(userdata));
++    const int64_t channels=dst->ne[1],kernel=columns->ne[0]/channels,length=columns->ne[1];
++    const auto * source=static_cast<const float *>(columns->data);
++    auto * out=static_cast<float *>(dst->data);
++    const int64_t count=ggml_nelements(dst),begin=count*ith/nth,end=count*(ith+1)/nth;
++    for(int64_t index=begin;index<end;++index) {
++        const int64_t t=index%dst->ne[0],c=index/dst->ne[0];
++        const int64_t first=std::max<int64_t>(0,(t-kernel+stride)/stride),last=std::min<int64_t>(length-1,t/stride);
++        float value=0;
++        for(int64_t frame=first;frame<=last;++frame)
++            value+=source[frame*columns->ne[0]+c*kernel+t-frame*stride];
++        out[index]=value;
++    }
++}
++// Exact F32 weights/inputs, same kernel orientation and overlap order as baseline.
++// A blocked GEMM replaces thousands of independent small dot products.
++inline ggml_tensor * mobile_conv_transpose(ggml_context * ctx,ggml_tensor * weight,ggml_tensor * input,int stride) {
++    if(stride<1 || (weight->type!=GGML_TYPE_F32 && weight->type!=GGML_TYPE_F16) || input->type!=GGML_TYPE_F32 ||
++       !ggml_is_contiguous(weight) || !ggml_is_contiguous(input) || weight->ne[2]!=input->ne[1] || input->ne[2]!=1)
++        throw std::runtime_error("CPU codec GEMM transpose contract mismatch");
++    auto * matrix=ggml_reshape_2d(ctx,ggml_cont(ctx,ggml_permute(ctx,weight,1,2,0,3)),weight->ne[2],weight->ne[0]*weight->ne[1]);
++    auto * x=ggml_cont(ctx,ggml_transpose(ctx,input));
++    auto * columns=ggml_mul_mat(ctx,matrix,x);
++    ggml_mul_mat_set_prec(columns,GGML_PREC_F32);
++    ggml_tensor * args[]={columns};
++    return ggml_custom_4d(ctx,GGML_TYPE_F32,(input->ne[0]-1)*stride+weight->ne[0],weight->ne[1],1,1,
++        args,1,mobile_col2im,GGML_N_TASKS_MAX,reinterpret_cast<void *>(static_cast<intptr_t>(stride)));
++}
++inline void mobile_snake_kernel(ggml_tensor * dst,const ggml_tensor * x,const ggml_tensor * alpha,int ith,int nth,void *) {
++    const auto * input=static_cast<const float *>(x->data);const auto * scales=static_cast<const float *>(alpha->data);
++    auto * out=static_cast<float *>(dst->data);const int64_t count=ggml_nelements(x);
++    for(int64_t i=count*ith/nth;i<count*(ith+1)/nth;++i) {
++        const float a=scales[(i/x->ne[0])%x->ne[1]],s=std::sin(a*input[i]);
++        out[i]=input[i]+(s*s)/a;
++    }
++}
++inline ggml_tensor * mobile_snake(ggml_context * ctx,ggml_tensor * x,ggml_tensor * alpha) {
++    if(x->type!=GGML_TYPE_F32 || alpha->type!=GGML_TYPE_F32 || !ggml_is_contiguous(x) ||
++       !ggml_is_contiguous(alpha) || ggml_nelements(alpha)!=x->ne[1])
++        throw std::runtime_error("CPU codec fused snake contract mismatch");
++    return ggml_map_custom2(ctx,x,alpha,mobile_snake_kernel,GGML_N_TASKS_MAX,nullptr);
 +}
 +}
 diff --git a/include/engine/community_models/audio8_tts/mobile_math.h b/include/engine/community_models/audio8_tts/mobile_math.h
@@ -84,10 +147,10 @@ index 0000000..9dddbef
 +}
 +}
 diff --git a/src/capi/audiocpp.cpp b/src/capi/audiocpp.cpp
-index 6915460..14c8b6b 100644
+index 6915460..c18c33c 100644
 --- a/src/capi/audiocpp.cpp
 +++ b/src/capi/audiocpp.cpp
-@@ -13,6 +13,27 @@
+@@ -13,6 +13,31 @@
   */
  
  #include "audiocpp.h"
@@ -95,6 +158,10 @@ index 6915460..14c8b6b 100644
 +
 +void audiocpp_audio8_progress(void (*progress)(const char *)) {
 +    engine::models::audio8_tts::mobile_options.progress=progress;
++}
++void audiocpp_audio8_codec_options(int threads,int optimized) {
++    auto & m=engine::models::audio8_tts::mobile_options;
++    m.codec_threads=threads;m.codec_optimized=optimized!=0;
 +}
 +void audiocpp_audio8_external_forward(audiocpp_audio8_forward_fn forward,
 +    const char * (*error)(void *), void * user) {
@@ -406,34 +473,68 @@ index ce70887..9b20418 100644
      sampling::TorchCudaSamplingPolicy sampling_policy_;
      std::unique_ptr<PrefillGraph> prefill_graph_;
 diff --git a/src/community_models/audio8_tts/codec.cpp b/src/community_models/audio8_tts/codec.cpp
-index 741fd02..4155cbf 100644
+index 741fd02..fff6b8b 100644
 --- a/src/community_models/audio8_tts/codec.cpp
 +++ b/src/community_models/audio8_tts/codec.cpp
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  #include <cstdlib>
  
  #include "engine/community_models/audio8_tts/codec.h"
 +#include "engine/community_models/audio8_tts/mobile.h"
++#include "engine/community_models/audio8_tts/mobile_codec.h"
  
  #include "engine/framework/audio/conversion.h"
  #include "engine/framework/audio/resampling.h"
-@@ -1088,7 +1089,8 @@ struct DecodeGraph {
+@@ -312,7 +314,15 @@ core::TensorValue causal_conv_transpose1d(
+     int64_t kernel,
+     int stride,
+     bool use_bias) {
+-    auto out = modules::ConvTranspose1dModule({
++    core::TensorValue out;
++    if(ctx.backend_type==core::BackendType::Cpu && mobile_options.codec_optimized && input.shape.dims[0]==1 &&
++       (weights.weight.type==GGML_TYPE_F32 || weights.weight.type==GGML_TYPE_F16)) {
++        const auto x=core::ensure_backend_addressable_layout(ctx,input);
++        const auto w=core::ensure_backend_addressable_layout(ctx,weights.weight);
++        auto * y=mobile_conv_transpose(ctx.ggml,w.tensor,x.tensor,stride);
++        if(use_bias && weights.bias) y=ggml_add(ctx.ggml,y,ggml_reshape_2d(ctx.ggml,weights.bias->tensor,1,out_channels));
++        out=core::wrap_tensor(y,core::TensorShape::from_dims({1,out_channels,y->ne[0]}),GGML_TYPE_F32);
++    } else out = modules::ConvTranspose1dModule({
+         in_channels,
+         out_channels,
+         kernel,
+@@ -1057,7 +1067,7 @@ struct DecodeGraph {
+     }
+ 
+     bool matches(int64_t frames, ggml_backend_t backend, int threads) const {
+-        return frame_capacity_ >= frames && backend_ == backend && threads_ == std::max(1, threads);
++        return frame_capacity_ == frames && backend_ == backend && threads_ == std::max(1, threads);
+     }
+ 
+     runtime::AudioBuffer run(const Audio8TtsCodes & codes) {
+@@ -1088,10 +1098,15 @@ struct DecodeGraph {
              }
              core::write_tensor_i32(code_inputs_[static_cast<size_t>(codebook)], padded);
          }
 -        core::set_backend_threads(backend_, threads_);
 +        mobile_check_cancelled();
-+        core::set_backend_threads(backend_, mobile_slow_threads(threads_));
++        core::set_backend_threads(backend_, mobile_codec_threads(threads_));
          const auto compute_start = std::chrono::steady_clock::now();
          const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
          ggml_backend_synchronize(backend_);
-@@ -1186,7 +1188,8 @@ struct EncodeGraph {
++        std::fprintf(stderr,"Audio8 codec optimized=%d threads=%d frames=%lld capacity=%lld nodes=%d compute_ms=%.2f\n",
++            mobile_options.codec_optimized,mobile_codec_threads(threads_),static_cast<long long>(codes.frames),
++            static_cast<long long>(frame_capacity_),ggml_graph_n_nodes(graph_),
++            engine::debug::elapsed_ms(compute_start,std::chrono::steady_clock::now()));
+         engine::debug::timing_log_scalar(
+             "audio8_tts.codec.graph_compute_ms",
+             engine::debug::elapsed_ms(compute_start, std::chrono::steady_clock::now()));
+@@ -1186,7 +1201,8 @@ struct EncodeGraph {
          }
          mono.resize(static_cast<size_t>(sample_capacity_), 0.0F);
          core::write_tensor_f32(input_, mono);
 -        core::set_backend_threads(backend_, threads_);
 +        mobile_check_cancelled();
-+        core::set_backend_threads(backend_, mobile_slow_threads(threads_));
++        core::set_backend_threads(backend_, mobile_codec_threads(threads_));
          const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
          ggml_backend_synchronize(backend_);
          if (status != GGML_STATUS_SUCCESS) {
@@ -485,3 +586,25 @@ index a9fecf0..d57336f 100644
      if (mem_saver) {
          ar_->release_runtime_graphs();
      }
+diff --git a/src/framework/modules/activation_modules.cpp b/src/framework/modules/activation_modules.cpp
+index fa4fc02..9b6502c 100644
+--- a/src/framework/modules/activation_modules.cpp
++++ b/src/framework/modules/activation_modules.cpp
+@@ -1,4 +1,6 @@
+ #include "engine/framework/modules/activation_modules.h"
++#include "engine/community_models/audio8_tts/mobile.h"
++#include "engine/community_models/audio8_tts/mobile_codec.h"
+ #include "engine/framework/modules/primitive_modules.h"
+ #include "engine/framework/modules/structural_modules.h"
+ 
+@@ -671,6 +673,10 @@ core::TensorValue Snake1dModule::build(
+         core::validate_shape(weights.alpha, core::TensorShape::from_dims({config_.hidden_size}), "alpha");
+         alpha_broadcast = core::reshape_tensor(ctx, ensure_f32(ctx, weights.alpha), alpha_shape);
+     }
++    if(ctx.backend_type==core::BackendType::Cpu && engine::models::audio8_tts::mobile_options.codec_optimized &&
++       ggml_nelements(weights.alpha.tensor)==input_f32.tensor->ne[1] && weights.alpha.type==GGML_TYPE_F32) {
++        return core::wrap_tensor(engine::models::audio8_tts::mobile_snake(ctx.ggml,input_f32.tensor,weights.alpha.tensor),input.shape,GGML_TYPE_F32);
++    }
+     const auto ax = core::wrap_tensor(ggml_mul(ctx.ggml, input_f32.tensor, alpha_broadcast.tensor), input_f32.shape, GGML_TYPE_F32);
+     const auto s = core::wrap_tensor(ggml_sin(ctx.ggml, ax.tensor), input_f32.shape, GGML_TYPE_F32);
+     if (weights.inverse_alpha) {

@@ -1,5 +1,20 @@
 # Audio8 Android system TTS
 
+## Version 4.7 — CPU codec kernels and independent decode threads
+
+Codec defaults to 5 independently configurable CPU threads, no longer inheriting
+a slow-AR/prefill setting of 2. Severe thermal status caps it to 3. A separate
+switch enables GEMM plus parallel overlap-add for F32/F16 transposed convolutions
+and single-pass CPU Snake activation. Weight dtype and sample rate are unchanged;
+no text/audio splitting or independent per-chunk voice generation is introduced.
+Disable the codec fast-path switch to compare the old kernels at the same thread
+count. The native tests compare both paths at 1/5 threads, multiple stride/length
+configurations and both weight dtypes; whole-model phone quality/performance still
+requires testing. Graph reuse now requires the exact frame count to avoid decoding
+the padded capacity of a previous longer utterance. Diagnostic output records
+codec threads, selected optimization, frame/capacity count and compute milliseconds.
+Existing model files, QNN caches and signing certificate remain unchanged.
+
 ## Version 4.6 — pinned prefill output contract and QNN exception cleanup
 
 The pinned slow graph emits only the last position: FP32 logits `[1,1,4097]`

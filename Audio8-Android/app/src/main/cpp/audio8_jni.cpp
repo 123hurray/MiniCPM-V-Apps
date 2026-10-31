@@ -70,17 +70,18 @@ struct AffinityScope {
 };
 struct MobileScope {
     JNIEnv * env; jobject sink; jmethodID cancelled;
-    MobileScope(JNIEnv * e,jobject s,bool compact,bool graphs,int slow,int fast)
+    MobileScope(JNIEnv * e,jobject s,bool compact,bool graphs,int slow,int fast,int codec,bool codecFast)
         :env(e),sink(s) {
         jclass cls=e->GetObjectClass(s); cancelled=e->GetMethodID(cls,"cancelled","()Z"); e->DeleteLocalRef(cls);
         if(!cancelled) throw std::runtime_error("Cancellation callback missing");
         audiocpp_audio8_progress([](const char * phase){audio8_stage(phase);});
+        audiocpp_audio8_codec_options(codec,codecFast);
         audiocpp_audio8_mobile_options(compact,graphs,slow,fast,[](void * p){
             auto * self=static_cast<MobileScope*>(p);
             return int(self->env->ExceptionCheck() || self->env->CallBooleanMethod(self->sink,self->cancelled));
         },this);
     }
-    ~MobileScope(){audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
+    ~MobileScope(){audiocpp_audio8_codec_options(0,0);audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
 };
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu) {
@@ -107,12 +108,12 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
     } catch(const std::exception& x) { fail(e,x);return 0; }
 }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(JNIEnv*,jclass,jlong handle) { delete reinterpret_cast<Engine*>(handle); }
-extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jboolean affinity,jobject sink) {
+extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
         ExternalScope external(h->ar.get());
         AffinityScope affinityScope(affinity);
-        MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8));
+        MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8),std::clamp(int(codecThreads),1,8),bool(codecFast));
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);
         if (!request) throw std::bad_alloc();
         std::string input=utf8(e,text),reference=utf8(e,ref),words=utf8(e,transcript);

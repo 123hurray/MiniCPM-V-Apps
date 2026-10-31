@@ -6,6 +6,8 @@ final class PerformanceSettings {
     final boolean compact, graphs, affinity, prewarm, cache;
     final boolean npu, fastNpu;
     final int threads, fastThreads;
+    final int codecThreads;
+    final boolean codecFast;
     final int loadTimeout, synthesisTimeout;
     PerformanceSettings(Context context) {
         // Separate service process: read an atomically replaced file, not cached SharedPreferences.
@@ -17,6 +19,7 @@ final class PerformanceSettings {
         cache = bool(p,"cache",true);
         npu = bool(p,"npu",false); fastNpu = bool(p,"fast_npu",false);
         threads = number(p,"threads",5); fastThreads = number(p,"fast_threads",2);
+        codecThreads=number(p,"codec_threads",5);codecFast=bool(p,"codec_fast",true);
         loadTimeout=timeout(p,"load_timeout",240);synthesisTimeout=timeout(p,"synthesis_timeout",180);
     }
     private static boolean bool(java.util.Properties p,String k,boolean d) { return Boolean.parseBoolean(p.getProperty(k,Boolean.toString(d))); }
@@ -29,16 +32,17 @@ final class PerformanceSettings {
         try { return Math.max(30,Math.min(900,Integer.parseInt(p.getProperty(key,""+fallback)))); }
         catch(NumberFormatException e) { return fallback; }
     }
-    static void save(Context c,boolean compact,boolean graphs,boolean affinity,boolean prewarm,boolean cache,int threads,int fast,boolean npu,boolean fastNpu) throws java.io.IOException {
+    static void save(Context c,boolean compact,boolean graphs,boolean affinity,boolean prewarm,boolean cache,int threads,int fast,boolean npu,boolean fastNpu,int codecThreads,boolean codecFast) throws java.io.IOException {
         var p = new java.util.Properties();
         p.setProperty("compact",""+compact); p.setProperty("graphs",""+graphs);
         p.setProperty("affinity",""+affinity); p.setProperty("prewarm",""+prewarm); p.setProperty("cache",""+cache);
         p.setProperty("threads",""+threads); p.setProperty("fast_threads",""+fast);
         p.setProperty("npu",""+npu); p.setProperty("fast_npu",""+fastNpu);
+        p.setProperty("codec_threads",""+codecThreads);p.setProperty("codec_fast",""+codecFast);
         android.util.AtomicFile f = new android.util.AtomicFile(file(c));
         var out = f.startWrite();
         try { p.store(out,"Audio8 performance"); f.finishWrite(out); }
         catch (java.io.IOException e) { f.failWrite(out); throw e; }
     }
-    String engineKey() { return compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu; }
+    String engineKey() { return compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu+":codec="+codecThreads+":"+codecFast; }
 }

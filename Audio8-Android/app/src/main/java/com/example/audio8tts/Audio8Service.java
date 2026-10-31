@@ -141,7 +141,9 @@ public final class Audio8Service extends TextToSpeechService {
                     int threads=activeThreads(s);
                     RuntimeStatus.write(this,"正在生成语音");
                     armWatchdog(s.synthesisTimeout,"语音合成超时");
-                    NativeEngine.synthesize(engine,text,clone ? ref.getPath() : "",clone ? words : "",request.getSpeechRate(),request.getPitch(),s.compact,s.graphs,threads,Math.min(threads,s.fastThreads),s.affinity,sink);
+                    PowerManager power=getSystemService(PowerManager.class);
+                    int codec=power!=null && power.getCurrentThermalStatus()>=PowerManager.THERMAL_STATUS_SEVERE?Math.min(s.codecThreads,3):s.codecThreads;
+                    NativeEngine.synthesize(engine,text,clone ? ref.getPath() : "",clone ? words : "",request.getSpeechRate(),request.getPitch(),s.compact,s.graphs,threads,Math.min(threads,s.fastThreads),codec,s.codecFast,s.affinity,sink);
                     disarmWatchdog();
                 }
                 if (!sink.cancelled() && complete[0]) {

@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 4.6"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 4.7"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Realistic-0.6B · SoC="+Build.SOC_MODEL+"\nCPU 基础模型约 1.43 GB，已有文件保留。NPU 另下载约 0.9 GB 模型，请预留至少 5 GB 空间。模型不在 APK 中。\nNPU 实验路径：主干解码 HTP INT4；预填充、codec 保留 CPU。Fast AR 可选 CPU INT4 / NPU。不是全模型 NPU。\n首次 NPU 编译可能需要数分钟，后续复用缓存。无法启动时会报错，不会静默改用 CPU。推理进程禁止新建互联网 socket；下载由独立界面进程完成。\n仍整段生成后播放，不随机拆段；停止在 AR 步间生效，不能中断单次加载或 codec 计算。语速和音调建议默认。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -42,28 +42,34 @@ public final class MainActivity extends Activity {
         CheckBox fastNpu = option(root,"Fast AR 也用 NPU（可与 CPU INT4 对比）",perf.fastNpu);
         fastNpu.setEnabled(npu.isChecked());
         npu.setOnCheckedChangeListener((b,checked) -> fastNpu.setEnabled(checked));
-        TextView threadLabels = new TextView(this);threadLabels.setText("下方第一个数：CPU 主干/预填充与 codec 线程；第二个数：Fast AR CPU 线程。它们不是 NPU 核心数。");root.addView(threadLabels);
-        EditText threads = new EditText(this); threads.setHint("主干 / codec 线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
+        TextView threadLabels = new TextView(this);threadLabels.setText("前两个输入：CPU 主干/预填充、Fast AR 的线程数；codec 在下方单独设置。它们不是 NPU 核心数。");root.addView(threadLabels);
+        EditText threads = new EditText(this); threads.setHint("主干 / 预填充线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
         EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
+        TextView codecLabel=new TextView(this);codecLabel.setText("音频 codec 独立线程（推荐 5，不跟随主干线程）");root.addView(codecLabel);
+        EditText codecThreads=new EditText(this);codecThreads.setInputType(2);codecThreads.setText(""+perf.codecThreads);root.addView(codecThreads);
+        CheckBox codecFast=option(root,"CPU codec 快速路径（GEMM 转置卷积、融合 Snake）",perf.codecFast);
         button(root,"保存性能设置", () -> {
             try {
                 int n=Integer.parseInt(threads.getText().toString()), f=Integer.parseInt(fastThreads.getText().toString());
-                if(n<1 || n>8 || f<1 || f>8) throw new IllegalArgumentException("线程数需为 1～8");
-                PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f,npu.isChecked(),fastNpu.isChecked());
+                int c=Integer.parseInt(codecThreads.getText().toString());
+                if(n<1 || n>8 || f<1 || f>8 || c<1 || c>8) throw new IllegalArgumentException("线程数需为 1～8");
+                PerformanceSettings.save(this,compact.isChecked(),graphs.isChecked(),affinity.isChecked(),prewarm.isChecked(),cache.isChecked(),n,f,npu.isChecked(),fastNpu.isChecked(),c,codecFast.isChecked());
                 speechWorker.execute(() -> {if(tts!=null)tts.stop();});
                 message("已保存，下次合成重载模型。若刚下载完 NPU 模型，请点下方重新连接系统引擎。");
             } catch(Exception e) { message("保存失败："+e.getMessage()); }
         });
         button(root,"恢复 4.2 对照设置", () -> {
             try {
-                PerformanceSettings.save(this,false,false,false,false,false,5,5,false,false);
+                PerformanceSettings.save(this,false,false,false,false,false,5,5,false,false,5,false);
+                codecThreads.setText("5");codecFast.setChecked(false);
                 compact.setChecked(false); graphs.setChecked(false); affinity.setChecked(false); prewarm.setChecked(false); cache.setChecked(false);
                 npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("5"); message("已保存 CPU 对照设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
         });
         button(root,"恢复推荐优化设置", () -> {
             try {
-                PerformanceSettings.save(this,true,true,true,false,true,5,2,false,false);
+                PerformanceSettings.save(this,true,true,true,false,true,5,2,false,false,5,true);
+                codecThreads.setText("5");codecFast.setChecked(true);
                 compact.setChecked(true); graphs.setChecked(true); affinity.setChecked(true); prewarm.setChecked(false); cache.setChecked(true);
                 npu.setChecked(false);fastNpu.setChecked(false);threads.setText("5"); fastThreads.setText("2"); message("已恢复推荐 CPU 优化设置；NPU 关闭。");
             } catch(Exception e) { message(e.getMessage()); }
@@ -184,7 +190,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.6 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 4.7 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }

@@ -10,6 +10,18 @@ CPP=ROOT/'Audio8-Android/app/src/main/cpp'
 JAVA=ROOT/'Audio8-Android/app/src/main/java/com/example/audio8tts'
 
 class AndroidBridgeTests(unittest.TestCase):
+    def test_codec_thread_and_layout_controls(self):
+        jni=(CPP/'audio8_jni.cpp').read_text()
+        self.assertIn('audiocpp_audio8_codec_options(codec,codecFast)',jni)
+        settings=(JAVA/'PerformanceSettings.java').read_text()
+        self.assertIn('number(p,"codec_threads",5)',settings)
+        self.assertIn('bool(p,"codec_fast",true)',settings)
+        patch=(ROOT/'scripts/audio8-mobile.patch').read_text()
+        self.assertIn('frame_capacity_ == frames',patch)
+        self.assertIn('mobile_codec_threads(threads_)',patch)
+        self.assertIn('mobile_conv_transpose',patch)
+        self.assertIn('mobile_snake_kernel',patch)
+
     def test_native_output_contract_and_registration_lifetime(self):
         with tempfile.TemporaryDirectory(prefix='audio8-contract-') as directory:
             executable=str(Path(directory)/'contract-test')

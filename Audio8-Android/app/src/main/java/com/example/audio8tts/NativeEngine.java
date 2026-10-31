@@ -8,6 +8,6 @@ final class NativeEngine {
                             String libraries, String cache, int fastThreads, boolean fastNpu);
     static native void synthesize(long handle, String text, String reference,
                                   String transcript, int rate, int pitch, boolean compact,
-                                  boolean graphs, int threads, int fastThreads, boolean affinity, Sink sink);
+                                  boolean graphs, int threads, int fastThreads, int codecThreads, boolean codecFast, boolean affinity, Sink sink);
     static native void close(long handle);
 }
