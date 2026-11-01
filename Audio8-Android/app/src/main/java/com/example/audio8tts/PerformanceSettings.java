@@ -50,5 +50,5 @@ final class PerformanceSettings {
         try { p.store(out,"Audio8 performance"); f.finishWrite(out); }
         catch (java.io.IOException e) { f.failWrite(out); throw e; }
     }
-    String engineKey() { return "preview01:"+compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu+":backend="+codecBackend+":liteThreads="+liteThreads+":windows="+codecWindows+":codecNpu="+codecNpu+":codec="+codecThreads+":"+codecFast; }
+    String engineKey() { return "preview01:ar=v4.8:"+compact+":"+graphs+":"+affinity+":"+threads+":"+fastThreads+":npu="+npu+":fastNpu="+fastNpu+":backend="+codecBackend+":liteThreads="+liteThreads+":windows="+codecWindows+":codecNpu="+codecNpu+":codec="+codecThreads+":"+codecFast; }
 }

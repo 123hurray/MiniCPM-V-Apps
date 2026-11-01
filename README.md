@@ -1,5 +1,20 @@
 # Audio8 Android system TTS
 
+## Version 5.3 — restore Preview 0.1B v4.8 AR scheduling
+
+AR uses the first Preview 0.1B Android release (`370defa`, v4.8) execution path:
+GGML's default per-compute threadpool and session-configured Falcon thread count.
+The v5.0 request-scoped eight-worker parking pools are removed. Compact head,
+fast-AR graph reuse, model, seed and sampling are unchanged. Cancellation and
+per-phase diagnostics are retained; Falcon compute is included in `slow_ms`.
+This is a targeted rollback, not a measured fix for the reported phone slowdown.
+
+The v5.2 LiteRT INT8 decoder, persistent buffers/weight cache, codec thread settings,
+model downloads and codec benchmarks are retained. Existing preferences and model
+files are reused. Version code 49 uses the same signing certificate. Compare the
+same text/voice/reference and thread settings with PCM caching disabled; report AR
+prefill, AR generation, codec and total timings separately.
+
 ## Version 5.2 — persistent LiteRT INT8 codec
 
 The default codec now uses the pinned 132 MB community LiteRT INT8 model with persistent buffers and weight caching. AR remains Preview 0.1B. Download the new LiteRT codec in settings; the default path skips QNN graph preparation. Same-code cold/warm CPU thread benchmarks, optional FP16/GPU comparisons, opt-in real-code export and offline folding/QDQ calibration tools are included. See [setup, validation limits and offline tools](docs/audio8-codec-optimization.md). Version code 48 retains the signing certificate. The ten-second target requires measurement on the target phone.

@@ -76,7 +76,7 @@ public final class Audio8Service extends TextToSpeechService {
         PowerManager power=getSystemService(PowerManager.class);
         int thermal=power==null ? 0 : power.getCurrentThermalStatus();
         int threads=thermal>=PowerManager.THERMAL_STATUS_SEVERE ? Math.min(s.threads,3) : s.threads;
-        ModelStore.log(this,"threads="+threads+" fast_threads="+Math.min(threads,s.fastThreads)+" thermal="+thermal);
+        ModelStore.log(this,"ar=v4.8 falcon_threads="+s.threads+" requested_slow_threads="+threads+" fast_threads="+Math.min(threads,s.fastThreads)+" thermal="+thermal);
         return threads;
     }
     private void armWatchdog(int seconds,String reason) {

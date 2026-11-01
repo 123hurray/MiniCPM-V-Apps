@@ -9,8 +9,8 @@ android {
         applicationId = "com.example.audio8tts"
         minSdk = 33
         targetSdk = 36
-        versionCode = 48
-        versionName = "5.2"
+        versionCode = 49
+        versionName = "5.3"
         buildConfigField("String", "NPU_MANIFEST_SHA256", "\"$npuCatalog\"")
         buildConfigField("String", "NPU_RELEASE_BASE", "\"https://github.com/123hurray/MiniCPM-V-Apps/releases/download/audio8-sm8550-int4-v1\"")
         ndk { abiFilters += "arm64-v8a" }
