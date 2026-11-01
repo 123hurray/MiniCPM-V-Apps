@@ -12,7 +12,7 @@ def read_codes(path):
     books,frames=np.frombuffer(raw[4:12],dtype='<i4')
     if books!=10 or not 1<=frames<=128 or len(raw)!=12+40*frames:raise ValueError('Invalid fixture shape')
     codes=np.frombuffer(raw[12:],dtype='<i4').copy().reshape(10,int(frames))
-    if np.any(codes<0) or np.any(codes[0]>=4096) or np.any(codes[1:]>=1024):raise ValueError('Invalid code indices')
+    if np.any(codes<0) or np.any(codes>=4096):raise ValueError('Invalid code indices')
     return codes
 
 def main():

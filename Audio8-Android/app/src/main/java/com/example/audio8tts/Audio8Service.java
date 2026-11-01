@@ -224,6 +224,7 @@ public final class Audio8Service extends TextToSpeechService {
                 rows.put(new org.json.JSONObject().put("backend",mode).put("cold_ms",elapsed).put("correlation_int8_cpu",CodecContract.correlation(int8,pcm)).put("production_enabled",false));
             }catch(Throwable e){rows.put(new org.json.JSONObject().put("backend",mode).put("error",String.valueOf(e.getMessage())).put("production_enabled",false));}
         }
+        if(destroyed||generation.get()!=ticket)throw new CancellationException("基准已停止");
         RuntimeStatus.write(this,"基准 · 现有 GGML codec，同一份音频码");
         ensureEngine(new PerformanceSettings(this,"ggml"));
         for(int run=0;run<2;run++){

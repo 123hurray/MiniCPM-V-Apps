@@ -22,8 +22,8 @@ def collect(path):
         books,n=np.frombuffer(raw[4:12],dtype='<i4')
         if books!=10 or n<1 or n>128 or len(raw)!=12+40*n:continue
         codes=np.frombuffer(raw[12:],dtype='<i4').reshape(10,int(n))
-        if np.any(codes<0) or np.any(codes[0]>=4096) or np.any(codes[1:]>=1024):raise ValueError('Invalid code indices')
-        padded=np.zeros((10,128),np.int32);padded[:,:n]=codes;arrays.append(padded)
+        if np.any(codes<0) or np.any(codes>=4096):raise ValueError('Invalid code indices')
+        padded=np.zeros((10,128),np.int32);padded[:,:n]=codes;padded[1:]=np.minimum(padded[1:],1023);arrays.append(padded)
     if len(arrays)<16:raise ValueError('At least 16 distinct real utterances of <=128 frames are required; random inputs are not a substitute')
     return arrays
 

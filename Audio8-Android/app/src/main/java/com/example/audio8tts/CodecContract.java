@@ -7,12 +7,12 @@ final class CodecContract {
     static final int BOOKS=10, CAPACITY=128, HOP=2048;
     static void validate(int[] codes,int frames){
         if(frames<1||frames>4096||codes.length!=BOOKS*frames)throw new IllegalArgumentException("音频码形状不符");
-        for(int q=0;q<BOOKS;q++)for(int t=0;t<frames;t++)if(codes[q*frames+t]<0||codes[q*frames+t]>=(q==0?4096:1024))throw new IllegalArgumentException("音频码超出码本范围 q="+q);
+        for(int q=0;q<BOOKS;q++)for(int t=0;t<frames;t++)if(codes[q*frames+t]<0||codes[q*frames+t]>=4096)throw new IllegalArgumentException("音频码超出码本范围 q="+q);
     }
     static int[] window(int[] codes,int frames,int start){
         if(start<0||start>=frames)throw new IllegalArgumentException("无效窗口");
         int[] out=new int[BOOKS*CAPACITY];int n=Math.min(CAPACITY,frames-start);
-        for(int q=0;q<BOOKS;q++)System.arraycopy(codes,q*frames+start,out,q*CAPACITY,n);return out;
+        for(int q=0;q<BOOKS;q++)for(int t=0;t<n;t++)out[q*CAPACITY+t]=Math.min(codes[q*frames+start+t],q==0?4095:1023);return out;
     }
     static byte[] encode(int[] codes,int frames){validate(codes,frames);var b=ByteBuffer.allocate(12+codes.length*4).order(ByteOrder.LITTLE_ENDIAN);b.put(new byte[]{65,56,67,49});b.putInt(BOOKS);b.putInt(frames);for(int v:codes)b.putInt(v);return b.array();}
     static int[] read(Path path)throws IOException{

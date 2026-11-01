@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 public final class CheckVoiceActivity extends Activity {
     @Override public void onCreate(Bundle state) {
-        super.onCreate(state); boolean ready = ModelStore.ready(this);
+        super.onCreate(state); var settings=new PerformanceSettings(this); boolean ready = ModelStore.ready(this) && (settings.codecBackend.equals("litert")?LiteCodecStore.ready(this):!settings.codecNpu||CodecModelStore.ready(this));
         Intent result = new Intent();
         ArrayList<String> voices = new ArrayList<>(List.of("zho-CHN", "eng-USA"));
         result.putStringArrayListExtra(TextToSpeech.Engine.EXTRA_AVAILABLE_VOICES, ready ? voices : new ArrayList<>());
