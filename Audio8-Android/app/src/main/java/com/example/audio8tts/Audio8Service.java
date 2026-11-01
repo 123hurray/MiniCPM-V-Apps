@@ -112,11 +112,14 @@ public final class Audio8Service extends TextToSpeechService {
                     if(prepare!=128 && prepare!=256)throw new IllegalArgumentException("不支持的 codec 容量");
                     PerformanceSettings settings=new PerformanceSettings(this);
                     if(!settings.codecNpu)throw new IllegalStateException("请先启用并保存 codec NPU");
-                    ensureEngine(settings);
+                    // Preparing NPU graphs must not retain the full GGUF/AR/CPU codec weights.
+                    if(engine!=0){NativeEngine.close(engine);engine=0;engineKey="";}
+                    cache.clear();
+                    ModelStore.log(this,"codec_prepare_ar_released=true");
                     if(callback.start(44100,AudioFormat.ENCODING_PCM_16BIT,1)!=TextToSpeech.SUCCESS)return;
                     ModelStore.log(this,"codec_prepare_begin capacity="+prepare);
                     armWatchdog(240,"NPU codec 准备超时");
-                    NativeEngine.prepareCodec(engine,prepare);disarmWatchdog();
+                    NativeEngine.prepareCodec(CodecModelStore.dir(this).getPath(),getApplicationInfo().nativeLibraryDir,NpuModelStore.runtimeCache(this).getPath()+"/preview01-codec-317c12d",prepare);disarmWatchdog();
                     callback.done();RuntimeStatus.write(this,"NPU codec 图已准备，接下来可试听");
                     ModelStore.log(this,"codec_prepare_done capacity="+prepare+" total_ms="+(SystemClock.elapsedRealtime()-start));return;
                 }

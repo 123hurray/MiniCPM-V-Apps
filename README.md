@@ -1,5 +1,26 @@
 # Audio8 Android system TTS
 
+## Version 5.1 — bound NPU codec graph memory
+
+A v5.0 device report failed after 48.6 s preparing 256 frames with QNN error 1002
+MEM_ALLOC during graph finalization. This does not establish which allocator
+failed. Preparation no longer loads/retains GGUF, AR or CPU codec weights. It
+releases an existing engine before independently preparing QNN codec contexts.
+
+The exact codec graph is partitioned into 14 sequential graph domains per capacity,
+cut at decoder residual boundaries. Every cross-part live tensor is preserved;
+there is no speech chunking, changed weights or CPU fallback. Graph composition
+is checked against the static source, including external weight byte offsets,
+boundary shapes/dtypes, and the single-consumer rule for large boundary buffers.
+Only one QNN session is resident during preparation or execution. Large consumed
+boundary buffers are released after copying outputs safely (including aliases).
+Tiny shape metadata can remain live. Existing downloaded external weights are reused.
+Update the small graph headers through the codec download button and prepare again;
+old monolithic contexts are not used. Per-part timings and RSS/peak virtual-memory
+samples identify any remaining allocator failure. NPU execution, memory limits,
+audio parity and the under-10-second target still need real-device verification.
+Version code 47 retains the signing certificate and the user's NPU selection.
+
 ## Version 5.0 — separate NPU preparation and improve Falcon AR scheduling
 
 Pure ONNX reference constant folding freezes 128/256-frame graphs and reduces

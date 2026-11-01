@@ -121,8 +121,14 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         return reinterpret_cast<jlong>(h.release());
     } catch(const std::exception& x) { fail(e,x);return 0; }
 }
-extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_prepareCodec(JNIEnv* e,jclass,jlong handle,jint frames) {
-    try{auto * h=reinterpret_cast<Engine*>(handle);if(!h || h->codecModels.empty())throw std::runtime_error("NPU codec not enabled");OnnxCodec codec(h->codecModels,h->codecLibraries,h->codecCache);codec.prepare(frames);}catch(const std::exception & x){fail(e,x);}
+extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_prepareCodec(JNIEnv* e,jclass,jstring models,jstring libraries,jstring cache,jint frames) {
+    try{
+        auto root=utf8(e,models);root=root.substr(0,root.find_last_of('/'));
+        audio8_status_path=root+"/native-status.txt";
+        int fd=open((root+"/diagnostics-native.txt").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
+        if(fd>=0){dup2(fd,STDERR_FILENO);close(fd);setvbuf(stderr,nullptr,_IONBF,0);}
+        OnnxCodec codec(utf8(e,models),utf8(e,libraries),utf8(e,cache));codec.prepare(frames);
+    }catch(const std::exception & x){fail(e,x);}
 }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(JNIEnv*,jclass,jlong handle) { delete reinterpret_cast<Engine*>(handle); }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jobject sink) {

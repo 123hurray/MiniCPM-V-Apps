@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 5.0"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 5.1"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Preview-0.1B Q8 · CPU · SoC="+Build.SOC_MODEL+"\n模型约 851 MB，从 GitHub Release 下载，不在 APK 中。旧 0.6B 文件保留，不会覆盖。\nAR 使用 CPU；codec 可选 NPU 实验路径。仅通过 x86 CPU 基础测试；手机端音质、速度待验证。\n使用 Audio8 Community License v1.0，详见模型发布页。仍整段生成后播放，建议默认语速和音调。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -45,7 +45,7 @@ public final class MainActivity extends Activity {
             try {CodecModelStore.enable(this,codecNpu.isChecked());message("已保存，下次请求重载；请先下载 codec 模型");}
             catch(Exception e){message(e.getMessage());}
         });
-        TextView codecNote=new TextView(this);codecNote.setText("先下载 codec 模型，再单独准备 NPU 图。准备与试听分开，按 128/256 帧容量复用；容量尾部补码，PCM 仅取真实长度，不拆句。因果前缀性质尚需真机对照验证。首次准备可能较慢，推理不再自动编译。");root.addView(codecNote);
+        TextView codecNote=new TextView(this);codecNote.setText("先更新 codec 子图，再单独准备 NPU 图。每个容量分为 14 个顺序子图，一次只加载一个，准备时释放 GGUF，避免整图峰值内存。准备与试听分开，按 128/256 帧容量复用；容量尾部补码，PCM 仅取真实长度，不拆句。因果前缀性质尚需真机对照验证。首次准备可能较慢，推理不再自动编译。");root.addView(codecNote);
         button(root,"下载 / 续传 codec ONNX 模型",() -> worker.execute(() -> {try{CodecModelStore.download(this,this::message);}catch(Exception e){message("codec 下载失败："+e.getMessage());}}));
         button(root,"codec 下载使用 HF 官方",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.OFFICIAL);message("codec 已切换至 HF 官方");}catch(Exception e){message(e.getMessage());}});
         button(root,"codec 下载使用 HF-Mirror",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.MIRROR);message("codec 已切换至 HF-Mirror");}catch(Exception e){message(e.getMessage());}});
@@ -179,7 +179,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 5.0 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 5.1 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }

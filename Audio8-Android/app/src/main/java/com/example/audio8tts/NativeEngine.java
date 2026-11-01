@@ -9,6 +9,6 @@ final class NativeEngine {
     static native void synthesize(long handle, String text, String reference,
                                   String transcript, int rate, int pitch, boolean compact,
                                   boolean graphs, int threads, int fastThreads, int codecThreads, boolean codecFast, boolean affinity, Sink sink);
-    static native void prepareCodec(long handle,int frames);
+    static native void prepareCodec(String models,String libraries,String cache,int frames);
     static native void close(long handle);
 }

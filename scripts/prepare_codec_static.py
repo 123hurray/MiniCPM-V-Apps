@@ -11,7 +11,9 @@ SOURCE_SHA='25379b866ad555b9a55226c46325344d2ebfafea1b474c29de5223a9d01ea533'
 def freeze(source,capacity,destination):
     raw=Path(source).read_bytes()
     if hashlib.sha256(raw).hexdigest()!=SOURCE_SHA:raise ValueError('Unexpected source graph')
-    m=onnx.load_model_from_string(raw)
+    return optimize(onnx.load_model_from_string(raw),capacity,destination)
+
+def optimize(m,capacity,destination):
     inp=m.graph.input[0]
     if inp.name!='codes' or inp.type.tensor_type.elem_type!=7:raise ValueError('Unexpected codec input')
     for dim,value in zip(inp.type.tensor_type.shape.dim,[1,10,capacity]):dim.ClearField('dim_param');dim.dim_value=value
