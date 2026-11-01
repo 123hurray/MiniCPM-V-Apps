@@ -1,5 +1,9 @@
 # Audio8 Android system TTS
 
+## Version 5.2 — persistent LiteRT INT8 codec
+
+The default codec now uses the pinned 132 MB community LiteRT INT8 model with persistent buffers and weight caching. AR remains Preview 0.1B. Download the new LiteRT codec in settings; the default path skips QNN graph preparation. Same-code cold/warm CPU thread benchmarks, optional FP16/GPU comparisons, opt-in real-code export and offline folding/QDQ calibration tools are included. See [setup, validation limits and offline tools](docs/audio8-codec-optimization.md). Version code 48 retains the signing certificate. The ten-second target requires measurement on the target phone.
+
 ## Version 5.1 — bound NPU codec graph memory
 
 A v5.0 device report failed after 48.6 s preparing 256 frames with QNN error 1002

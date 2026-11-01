@@ -1,0 +1,29 @@
+# Audio8 Android 5.2 codec
+
+Default: pinned LiteRT 2.2.0 CPU INT8 codec with persistent model, buffers and XNNPACK weight cache, four threads. AR keeps the existing 0.1B compact semantic head, reused graphs, KV cache and native thread pool. Switching codec does not replace AR. The previous 14-part QNN preparation is explicit experimental mode, so the default path no longer enters its 5/14 preparation step.
+
+Install the signed APK, open settings, download **LiteRT INT8 codec (132 MB)**, choose **LiteRT INT8 CPU**, and save. The original GGUF is still required for AR and reference encoding. The codec download is pinned to litert-community/Audio8-TTS-Preview-0.6b revision `56fcb491ebf03eb3a1a66615fedf6744015dd4c7`, verified by SHA-256 before use. Original 0.1B and 0.6B codec.pth are identical (`c310505aa11fe2f6cc63b8d3130dc7e77e73227774f5c62575769b1f47a8d048`); sharing this codec does not change the AR model to 0.6B. Model licenses continue to apply independently of this app's license.
+
+Static input: int32 `[1,10,128]`, book-major codes. Output: float32 mono 44100 Hz, 2048 samples/frame. First codebook has 4096 entries; remaining nine have 1024. Short utterances are padded and trimmed. More than 128 frames requires explicitly enabling the context-window option; it uses 64 frames of left context, follows the community overlapping-window approach, and needs listening tests at boundaries. It is not sample-exact full-context decoding. With the option disabled, a longer utterance returns an explicit error instead of silently truncating it.
+
+## Measure on the target phone
+
+1. Enable real-code recording, then synthesize a short utterance (up to 128 frames, about 5.94 seconds). Codes are recorded before decoding, including when decoding fails. Recording defaults to off; at most 64 hash-named fixtures are retained. Codes can reconstruct speech even though no source text is stored.
+2. Run the codec benchmark. It reuses exactly the same codes, tests LiteRT INT8 CPU at 4, 2 and 5 threads, measures cold/warm calls, verifies repeat consistency and input sensitivity, then runs the existing GGML codec twice for comparison. The recommended thread count is reported, not automatically applied. Timings include Java copies; cold includes model initialization. No AR generation runs inside this codec-only comparison.
+3. Optionally download the FP16 codec (262 MB) to add CPU FP16 and GPU FP16 comparisons. GPU is benchmark-only and requests GPU explicitly; errors and correlation are reported. It is not a production backend. Correlation does not replace a listening test.
+4. Export the benchmark package. It contains real `.a8c` fixtures and `codec-benchmark.json`; export diagnostics for per-stage AR, reference encoding, codec, model initialization and total request timings. `target_10000ms_met` is per actual synthesis; PCM cache hits are labeled.
+
+The host CPU smoke test executes the actual pinned model with real community voice codes, checks shape, finite/non-silent PCM, repeatability and different-input sensitivity. Android CI additionally compiles/lints the Kotlin/Java/JNI app and runs native math and codec layout tests. Neither test proves SM8550 speed or audio quality. End-to-end under ten seconds remains a target until measured on the phone. Cold reference encoding still uses GGML; existing in-session reference-code caching avoids repeat encoding, but this release does not provide an accelerated encoder.
+
+## Offline optimized ONNX and QNN calibration
+
+`scripts/export_optimized_codec.py` requires an explicitly trusted local official checkpoint and a real exported `.a8c`. It checks the original codec SHA-256, loads only codec weights, removes weight normalization, folds codebook projections/ConvNeXt affine/layer scales, precomputes causal padding/RoPE/masks, and uses standard-op RMS normalization. Export requires an original-vs-optimized PCM parity gate (max absolute error <= 1e-3) before writing F32 static T128 ONNX. Helpers are derived from DakeQQ/Text-to-Speech-TTS-ONNX revision `ae69a6c1cc9e43c855d7d906c80770581f49ee3c`; retained license and changes are in `docs/licenses/`.
+
+`scripts/calibrate_qdq_codec.py` consumes at least 16 distinct short real fixtures, rejects invalid code indices, and uses ONNX Runtime QNN preprocessing/calibration to produce W8A16 QDQ. Random codes are not calibration data. Both tools run offline; no optimization/export runs during app startup. Example:
+
+```bash
+python scripts/export_optimized_codec.py --checkpoint /path/to/trusted-checkpoint --codes /path/to/real.a8c --output codec-export
+python scripts/calibrate_qdq_codec.py --model codec-export/codec-optimized-f32-T128.onnx --calibration /path/to/codec-benchmark.zip --output codec-qdq
+```
+
+These tools have syntax/fixture checks but have not passed checkpoint parity, QNN execution or phone validation in this release. Generated graphs are research artifacts and are not selected or downloaded by the app. Hardware compilation, unsupported-op placement, partition transfers, finite PCM, listening quality and measured end-to-end benefit must pass before enabling a QDQ codec on the phone. The old FP16 QNN partition experiment is retained for comparison, not advertised as calibrated INT8 NPU execution.

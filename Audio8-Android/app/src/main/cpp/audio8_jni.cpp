@@ -81,6 +81,25 @@ struct AffinityScope {
     }
     ~AffinityScope(){if(changed) sched_setaffinity(0,sizeof(previous),&previous);}
 };
+struct JavaCodecScope {
+    JNIEnv * env;jobject sink;jmethodID method;std::vector<float> pcm;std::string error;
+    JavaCodecScope(JNIEnv * e,jobject s,bool enabled):env(e),sink(s){
+        if(!enabled)return;
+        jclass cls=e->GetObjectClass(s);method=e->GetMethodID(cls,"codec","([II)[F");e->DeleteLocalRef(cls);
+        if(!method)throw std::runtime_error("Missing Java codec callback");
+        audiocpp_audio8_external_codec(+[](void * p,const int32_t * data,int64_t books,int64_t frames,const float ** out,int64_t * count)->int{
+            auto * c=static_cast<JavaCodecScope*>(p);auto * e=c->env;
+            if(books!=10 || frames<1 || frames>4096){c->error="Invalid codec shape";return -1;}
+            auto input=e->NewIntArray(books*frames);if(!input){c->error="Codec input allocation failed";return -1;}
+            e->SetIntArrayRegion(input,0,books*frames,reinterpret_cast<const jint*>(data));
+            auto output=static_cast<jfloatArray>(e->CallObjectMethod(c->sink,c->method,input,jint(frames)));e->DeleteLocalRef(input);
+            if(e->ExceptionCheck()||!output){c->error="Java codec failed";return -1;}
+            auto n=e->GetArrayLength(output);if(n!=frames*2048){e->DeleteLocalRef(output);c->error="Java codec output length mismatch";return -1;}
+            c->pcm.resize(n);e->GetFloatArrayRegion(output,0,n,c->pcm.data());e->DeleteLocalRef(output);*out=c->pcm.data();*count=n;return e->ExceptionCheck()?-1:0;
+        },+[](void * p)->const char *{return static_cast<JavaCodecScope*>(p)->error.c_str();},this);
+    }
+    ~JavaCodecScope(){audiocpp_audio8_external_codec(nullptr,nullptr,nullptr);}
+};
 struct MobileScope {
     JNIEnv * env; jobject sink; jmethodID cancelled;
     MobileScope(JNIEnv * e,jobject s,bool compact,bool graphs,int slow,int fast,int codec,bool codecFast)
@@ -89,12 +108,19 @@ struct MobileScope {
         if(!cancelled) throw std::runtime_error("Cancellation callback missing");
         audiocpp_audio8_progress([](const char * phase){audio8_stage(phase);});
         audiocpp_audio8_codec_options(codec,codecFast);
+        audiocpp_audio8_observe_codes(+[](void * p,const int32_t * codes,int64_t books,int64_t frames){
+            auto * self=static_cast<MobileScope*>(p);auto * e=self->env;
+            jclass cls=e->GetObjectClass(self->sink);auto method=e->GetMethodID(cls,"captureCodes","([II)V");e->DeleteLocalRef(cls);
+            if(!method || books!=10 || frames<1 || frames>4096)return;
+            auto data=e->NewIntArray(books*frames);if(!data)return;
+            e->SetIntArrayRegion(data,0,books*frames,reinterpret_cast<const jint*>(codes));e->CallVoidMethod(self->sink,method,data,jint(frames));e->DeleteLocalRef(data);
+        },this);
         audiocpp_audio8_mobile_options(compact,graphs,slow,fast,[](void * p){
             auto * self=static_cast<MobileScope*>(p);
             return int(self->env->ExceptionCheck() || self->env->CallBooleanMethod(self->sink,self->cancelled));
         },this);
     }
-    ~MobileScope(){audiocpp_audio8_codec_options(0,0);audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
+    ~MobileScope(){audiocpp_audio8_observe_codes(nullptr,nullptr);audiocpp_audio8_codec_options(0,0);audiocpp_audio8_progress(nullptr);audiocpp_audio8_mobile_options(0,0,0,0,nullptr,nullptr);}
 };
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(JNIEnv* e,jclass,jstring path,jint threads,jboolean affinity,jstring npuModels,jstring libraries,jstring cache,jint fastThreads,jboolean fastNpu,jstring codecModels) {
@@ -131,13 +157,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_prepar
     }catch(const std::exception & x){fail(e,x);}
 }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(JNIEnv*,jclass,jlong handle) { delete reinterpret_cast<Engine*>(handle); }
-extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jobject sink) {
+extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jboolean useJavaCodec,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
         CodecReleaseScope release{h};
         ExternalScope external(h);
         AffinityScope affinityScope(affinity);
         MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8),std::clamp(int(codecThreads),1,8),bool(codecFast));
+        JavaCodecScope javaCodec(e,sink,useJavaCodec);
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);
         if (!request) throw std::bad_alloc();
         std::string input=utf8(e,text),reference=utf8(e,ref),words=utf8(e,transcript);
@@ -180,4 +207,18 @@ extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthe
         }
         if(!block.empty()) flush();
     } catch(const std::exception& x) { fail(e,x); }
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL Java_com_example_audio8tts_NativeEngine_baselineCodec(JNIEnv * e,jclass,jlong handle,jintArray codes,jint frames,jint threads){
+    try{
+        auto * h=reinterpret_cast<Engine*>(handle);if(!h || frames<1 || frames>128 || e->GetArrayLength(codes)!=10*frames)throw std::runtime_error("Invalid codec benchmark");
+        std::vector<int32_t> values(10*frames);e->GetIntArrayRegion(codes,0,values.size(),values.data());
+        audiocpp_audio8_external_codec(nullptr,nullptr,nullptr);audiocpp_audio8_codec_options(threads,1);
+        struct Reset{~Reset(){audiocpp_audio8_codec_options(0,0);}} reset;
+        audiocpp_result * raw=nullptr;check(audiocpp_audio8_decode_codes(h->session,values.data(),10,frames,&raw));
+        std::unique_ptr<audiocpp_result,decltype(&audiocpp_result_free)> result(raw,audiocpp_result_free);
+        const float * data=nullptr;size_t count=0;int rate=0,channels=0;check(audiocpp_result_audio(raw,&data,&count,&rate,&channels));
+        if(!data || count!=size_t(frames)*2048 || rate!=44100 || channels!=1)throw std::runtime_error("Invalid baseline PCM");
+        auto out=e->NewFloatArray(count);if(out)e->SetFloatArrayRegion(out,0,count,data);return out;
+    }catch(const std::exception & x){fail(e,x);return nullptr;}
 }

@@ -1,13 +1,14 @@
 diff --git a/include/audiocpp.h b/include/audiocpp.h
-index e85ad9fc..890bca23 100644
+index e85ad9fc..78f3f888 100644
 --- a/include/audiocpp.h
 +++ b/include/audiocpp.h
-@@ -54,6 +54,19 @@ extern "C" {
+@@ -54,6 +54,20 @@ extern "C" {
  #define AUDIOCPP_ABI_VERSION_MINOR 2
  #define AUDIOCPP_ABI_VERSION_PATCH 0
  
 +/* Audio8 Android extension; controls apply only to the calling thread. */
 +AUDIOCPP_API void audiocpp_audio8_progress(void (*progress)(const char *));
++AUDIOCPP_API void audiocpp_audio8_observe_codes(void (*)(void *, const int32_t *, int64_t, int64_t), void *);
 +typedef int (*audiocpp_audio8_codec_fn)(void *, const int32_t *, int64_t, int64_t, const float **, int64_t *);
 +AUDIOCPP_API void audiocpp_audio8_external_codec(audiocpp_audio8_codec_fn, const char * (*)(void *), void *);
 +AUDIOCPP_API void audiocpp_audio8_codec_options(int threads,int optimized);
@@ -22,12 +23,32 @@ index e85ad9fc..890bca23 100644
  /* Packed as (major << 16) | (minor << 8) | patch. A caller built against a
   * different MAJOR must not use the library. MINOR increments when entry points
   * are added -- nothing is removed or changed -- so a caller needing a newer one
+@@ -268,6 +282,7 @@ AUDIOCPP_API const char * audiocpp_session_family(const audiocpp_session * sessi
+ AUDIOCPP_API audiocpp_status audiocpp_session_prepare(audiocpp_session * session,
+                                                       const audiocpp_request * request);
+ 
++AUDIOCPP_API audiocpp_status audiocpp_audio8_decode_codes(audiocpp_session *, const int32_t *, int64_t, int64_t, audiocpp_result **);
+ AUDIOCPP_API audiocpp_status audiocpp_session_run(audiocpp_session * session,
+                                                   const audiocpp_request * request,
+                                                   audiocpp_result ** out_result);
+diff --git a/include/engine/community_models/audio8_tts/generator.h b/include/engine/community_models/audio8_tts/generator.h
+index 63cb15a9..d7c595c0 100644
+--- a/include/engine/community_models/audio8_tts/generator.h
++++ b/include/engine/community_models/audio8_tts/generator.h
+@@ -23,6 +23,7 @@ public:
+         std::unique_ptr<Audio8TtsCodecRuntime> codec);
+     ~Audio8TtsGenerator();
+ 
++    runtime::AudioBuffer decode_codes(const Audio8TtsCodes & codes);
+     Audio8TtsCodes encode_reference(const runtime::AudioBuffer & audio);
+     Audio8TtsGenerationResult generate(
+         const Audio8TtsRequest & request,
 diff --git a/include/engine/community_models/audio8_tts/mobile.h b/include/engine/community_models/audio8_tts/mobile.h
 new file mode 100644
-index 00000000..d6035eab
+index 00000000..4532b264
 --- /dev/null
 +++ b/include/engine/community_models/audio8_tts/mobile.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +#include <cstdint>
 +#include <stdexcept>
@@ -43,6 +64,8 @@ index 00000000..d6035eab
 +    int (*codec_decode)(void *, const int32_t *, int64_t, int64_t, const float **, int64_t *) = nullptr;
 +    const char * (*codec_error)(void *) = nullptr;
 +    void * codec_user = nullptr;
++    void (*observe_codes)(void *,const int32_t *,int64_t,int64_t)=nullptr;
++    void * observe_user=nullptr;
 +    bool compact_head = false;
 +    bool retain_graphs = false;
 +    int fast_threads = 0;
@@ -197,19 +220,33 @@ index 00000000..a827db57
 +    MobileThreadpoolScope & operator=(const MobileThreadpoolScope &)=delete;
 +};
 +}
+diff --git a/include/engine/community_models/audio8_tts/session.h b/include/engine/community_models/audio8_tts/session.h
+index e4e4647d..75d88c91 100644
+--- a/include/engine/community_models/audio8_tts/session.h
++++ b/include/engine/community_models/audio8_tts/session.h
+@@ -35,6 +35,7 @@ public:
+     runtime::VoiceTaskKind task_kind() const override;
+     runtime::RunMode run_mode() const override;
+     void prepare(const runtime::SessionPreparationRequest & request) override;
++    runtime::AudioBuffer decode_codes(const Audio8TtsCodes & codes);
+     runtime::TaskResult run(const runtime::TaskRequest & request) override;
+ 
+     // IStreamingVoiceTaskSession — omnivoice/session.h:22 pattern
 diff --git a/src/capi/audiocpp.cpp b/src/capi/audiocpp.cpp
-index 69154602..ec4abd62 100644
+index 69154602..8a0f6a67 100644
 --- a/src/capi/audiocpp.cpp
 +++ b/src/capi/audiocpp.cpp
-@@ -13,6 +13,35 @@
+@@ -13,6 +13,37 @@
   */
  
  #include "audiocpp.h"
 +#include "engine/community_models/audio8_tts/mobile.h"
++#include "engine/community_models/audio8_tts/session.h"
 +
 +void audiocpp_audio8_progress(void (*progress)(const char *)) {
 +    engine::models::audio8_tts::mobile_options.progress=progress;
 +}
++void audiocpp_audio8_observe_codes(void (*fn)(void *,const int32_t *,int64_t,int64_t),void * user){auto & m=engine::models::audio8_tts::mobile_options;m.observe_codes=fn;m.observe_user=user;}
 +void audiocpp_audio8_external_codec(audiocpp_audio8_codec_fn fn, const char * (*error)(void *), void * user) {
 +    auto & m=engine::models::audio8_tts::mobile_options;
 +    m.codec_decode=fn;m.codec_error=error;m.codec_user=user;
@@ -237,6 +274,23 @@ index 69154602..ec4abd62 100644
  
  #include "engine/framework/runtime/task_vocabulary.h"
  
+@@ -640,6 +671,16 @@ audiocpp_status audiocpp_session_run(audiocpp_session * session,
+     });
+ }
+ 
++audiocpp_status audiocpp_audio8_decode_codes(audiocpp_session * session,const int32_t * values,int64_t books,int64_t frames,audiocpp_result ** out){
++    if(!session || !values || !out || books!=10 || frames<1 || frames>4096)return fail(AUDIOCPP_ERR_INVALID_ARGUMENT,"Invalid codec benchmark input");
++    *out=nullptr;return guard([&]{
++        auto * typed=dynamic_cast<engine::models::audio8_tts::Audio8TtsSession*>(session->session.get());
++        if(!typed)throw std::runtime_error("Not an Audio8 session");
++        engine::models::audio8_tts::Audio8TtsCodes codes;codes.codebooks=books;codes.frames=frames;codes.codes.assign(values,values+books*frames);
++        auto result=std::make_unique<audiocpp_result>();result->result.audio_output=typed->decode_codes(codes);*out=result.release();return AUDIOCPP_OK;
++    });
++}
++
+ /* ------------------------------------------------------------------ */
+ /* Request                                                             */
+ /* ------------------------------------------------------------------ */
 diff --git a/src/community_models/audio8_tts/ar.cpp b/src/community_models/audio8_tts/ar.cpp
 index ce70887c..6a1c85ea 100644
 --- a/src/community_models/audio8_tts/ar.cpp
@@ -674,7 +728,7 @@ index 741fd029..dacac4a0 100644
  }
  
 diff --git a/src/community_models/audio8_tts/generator.cpp b/src/community_models/audio8_tts/generator.cpp
-index a9fecf01..d57336f0 100644
+index a9fecf01..c10318c5 100644
 --- a/src/community_models/audio8_tts/generator.cpp
 +++ b/src/community_models/audio8_tts/generator.cpp
 @@ -1,4 +1,6 @@
@@ -684,7 +738,7 @@ index a9fecf01..d57336f0 100644
  
  #include "engine/framework/debug/profiler.h"
  
-@@ -30,6 +32,7 @@ Audio8TtsGenerator::Audio8TtsGenerator(
+@@ -30,11 +32,14 @@ Audio8TtsGenerator::Audio8TtsGenerator(
  Audio8TtsGenerator::~Audio8TtsGenerator() = default;
  
  Audio8TtsCodes Audio8TtsGenerator::encode_reference(const runtime::AudioBuffer & audio) {
@@ -692,7 +746,14 @@ index a9fecf01..d57336f0 100644
      auto codes = codec_->encode_reference(audio);
      codec_->release_encode_graph();
      return codes;
-@@ -53,6 +56,7 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+ }
+ 
++runtime::AudioBuffer Audio8TtsGenerator::decode_codes(const Audio8TtsCodes & codes){return codec_->decode(codes);}
++
+ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+     const Audio8TtsRequest & request,
+     const std::vector<Audio8TtsCodes> & reference_codes,
+@@ -53,6 +58,7 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
  
      const auto ar_start = Clock::now();
      Audio8TtsGenerationResult result;
@@ -700,12 +761,13 @@ index a9fecf01..d57336f0 100644
      result.codes = ar_->generate(prompt, request.generation);
      engine::debug::trace_log_scalar("audio8_tts.generated.frames", result.codes.frames);
      engine::debug::trace_log_scalar("audio8_tts.generated.codebooks", result.codes.codebooks);
-@@ -61,11 +65,19 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
+@@ -61,11 +67,20 @@ Audio8TtsGenerationResult Audio8TtsGenerator::generate(
          engine::debug::elapsed_ms(ar_start, Clock::now()));
  
      const auto decode_start = Clock::now();
 +    mobile_check_cancelled();
 +    if(mobile_options.progress) mobile_options.progress("解码音频 · CPU codec");
++    if(mobile_options.observe_codes)mobile_options.observe_codes(mobile_options.observe_user,result.codes.codes.data(),result.codes.codebooks,result.codes.frames);
      result.audio = codec_->decode(result.codes);
      engine::debug::timing_log_scalar(
          "audio8_tts.codec_decode_ms",
@@ -721,6 +783,19 @@ index a9fecf01..d57336f0 100644
      if (mem_saver) {
          ar_->release_runtime_graphs();
      }
+diff --git a/src/community_models/audio8_tts/session.cpp b/src/community_models/audio8_tts/session.cpp
+index 41a68678..c15967f0 100644
+--- a/src/community_models/audio8_tts/session.cpp
++++ b/src/community_models/audio8_tts/session.cpp
+@@ -556,6 +556,8 @@ const Audio8TtsCodes & Audio8TtsSession::resolve_reference_codes(const Audio8Tts
+     return cached->codes;
+ }
+ 
++runtime::AudioBuffer Audio8TtsSession::decode_codes(const Audio8TtsCodes & codes){return generator_->decode_codes(codes);}
++
+ runtime::TaskResult Audio8TtsSession::run(const runtime::TaskRequest & request) {
+     require_prepared("Audio8 TTS run()");
+     if (task_.mode != runtime::RunMode::Offline) {
 diff --git a/src/framework/modules/activation_modules.cpp b/src/framework/modules/activation_modules.cpp
 index fa4fc022..9b6502c3 100644
 --- a/src/framework/modules/activation_modules.cpp

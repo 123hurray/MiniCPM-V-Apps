@@ -32,6 +32,7 @@ jobs:
       - name: Install SDK and pinned native runtime
         run: |
           python3 scripts/test_audio8_android_bridge.py
+          java scripts/TestCodecContract.java
           java scripts/TestDownloadEndpoint.java
           java scripts/TestTtsManifest.java
           mkdir -p "$RUNNER_TEMP/pcm-test"
@@ -60,13 +61,13 @@ jobs:
           grep -F 'lto=thin' out/native-optimization-config.txt
           grep -m 1 -- '-flto=thin' "$native_dir/build.ninja" >> out/native-optimization-config.txt
           grep -m 1 -- '-O3' "$native_dir/build.ninja" >> out/native-optimization-config.txt
-          cp Audio8-Android/app/build/outputs/apk/release/app-release-unsigned.apk out/Audio8-Android-v5.1-unsigned.apk
+          cp Audio8-Android/app/build/outputs/apk/release/app-release-unsigned.apk out/Audio8-Android-v5.2-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" out/
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging out/Audio8-Android-v5.1-unsigned.apk | tee out/apk-metadata.txt
-          grep -F "name='com.example.audio8tts' versionCode='47' versionName='5.1'" out/apk-metadata.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging out/Audio8-Android-v5.2-unsigned.apk | tee out/apk-metadata.txt
+          grep -F "name='com.example.audio8tts' versionCode='48' versionName='5.2'" out/apk-metadata.txt
           java scripts/TestTtsManifest.java Audio8-Android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree out/Audio8-Android-v5.1-unsigned.apk AndroidManifest.xml > out/manifest-tree.txt
-          unzip -l out/Audio8-Android-v5.1-unsigned.apk | tee out/apk-files.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree out/Audio8-Android-v5.2-unsigned.apk AndroidManifest.xml > out/manifest-tree.txt
+          unzip -l out/Audio8-Android-v5.2-unsigned.apk | tee out/apk-files.txt
           grep -F 'lib/arm64-v8a/libonnxruntime_providers_qnn.so' out/apk-files.txt
           grep -F 'lib/arm64-v8a/libQnnHtpV73Skel.so' out/apk-files.txt
           grep -F 'lib/arm64-v8a/libQnnHtpPrepare.so' out/apk-files.txt
@@ -74,6 +75,8 @@ jobs:
             echo 'Model weights must not be bundled into the APK' >&2
             exit 1
           fi
+          cp docs/audio8-codec-optimization.md out/
+          cp docs/licenses/* out/
           printf '%s\n' "$AUDIO8_NPU_MANIFEST_SHA256" > out/npu-catalog-sha256.txt
       - name: Sign only with a persistent owner-provided key
         env:
@@ -88,13 +91,14 @@ jobs:
           fi
           trap 'rm -f "$RUNNER_TEMP/audio8-signing.jks"' EXIT
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/audio8-signing.jks"
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -f 4 out/Audio8-Android-v5.1-unsigned.apk "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/audio8-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out out/MiniCPM-V-demo-Android-v5.1.apk "$RUNNER_TEMP/aligned.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs out/MiniCPM-V-demo-Android-v5.1.apk | tee out/signing-certificate.txt
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -f 4 out/Audio8-Android-v5.2-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/audio8-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out out/MiniCPM-V-demo-Android-v5.2.apk "$RUNNER_TEMP/aligned.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs out/MiniCPM-V-demo-Android-v5.2.apk | tee out/signing-certificate.txt
           grep -F '42bf8536d97d3a3e6ccb42252a91cd471296045c6455eb7d55d202bb868a8905' out/signing-certificate.txt
       - name: Prepare pinned static codec graphs without ORT or QNN
         run: |
-          python3 -m pip install onnx==1.20.1 numpy==2.3.5
+          python3 -m pip install onnx==1.20.1 numpy==2.3.5 ai-edge-litert==2.2.0
+          python3 scripts/test_litert_codec.py --download "$RUNNER_TEMP/litert-smoke"
           curl -fL --retry 3 'https://huggingface.co/Edge0/audio8-TTS-0.1B-ONNX-INT8/resolve/317c12d4e0da83847b594fcf8bd74bf2c76615ec/codec_decoder_fp16.onnx' -o "$RUNNER_TEMP/codec-source.onnx"
           python3 scripts/partition_codec.py "$RUNNER_TEMP/codec-source.onnx" out
           python3 scripts/test_codec_partitions.py "$RUNNER_TEMP/codec-source.onnx" out
@@ -104,15 +108,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -f out/MiniCPM-V-demo-Android-v5.1.apk
-          (cd out && sha256sum MiniCPM-V-demo-Android-v5.1.apk > APK-SHA256SUMS)
-          gh release create audio8-android-v5.1 --target "$GITHUB_SHA" --prerelease --title 'Audio8 Android v5.1 · Preview 0.1B partitioned codec NPU' --notes 'Releases GGUF before codec preparation and sequentially compiles/runs 14 NPU graph partitions per capacity to reduce peak memory, persistent release certificate. Android 13+, ARM64/SM8550 target. Phone quality and speed remain unvalidated. Model downloaded separately under Audio8 Community License v1.0.'
-          gh release upload audio8-android-v5.1 out/MiniCPM-V-demo-Android-v5.1.apk out/signing-certificate.txt out/APK-SHA256SUMS out/codec-*-part*.onnx out/codec-parts.json
+          test -f out/MiniCPM-V-demo-Android-v5.2.apk
+          (cd out && sha256sum MiniCPM-V-demo-Android-v5.2.apk > APK-SHA256SUMS)
+          gh release create audio8-android-v5.2 --target "$GITHUB_SHA" --prerelease --title 'Audio8 Android v5.2 · Preview 0.1B LiteRT INT8 codec' --notes 'Persistent LiteRT INT8 CPU codec, pinned checksummed download, real-code benchmark against GGML, opt-in fixtures and offline folding/QDQ tools. Legacy QNN is explicit experimental mode. Android 13+, ARM64/SM8550 target. Phone quality and speed remain unvalidated. Model downloaded separately under Audio8 Community License v1.0.'
+          gh release upload audio8-android-v5.2 out/MiniCPM-V-demo-Android-v5.2.apk out/signing-certificate.txt out/APK-SHA256SUMS out/codec-*-part*.onnx out/codec-parts.json out/audio8-codec-optimization.md out/*NOTICE* out/*Apache*
       - name: Checksums
         run: cd out && sha256sum *.apk > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: Audio8-Android-v5.1
+          name: Audio8-Android-v5.2
           path: out/
           if-no-files-found: error
           retention-days: 30

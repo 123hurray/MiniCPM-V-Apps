@@ -9,8 +9,8 @@ android {
         applicationId = "com.example.audio8tts"
         minSdk = 33
         targetSdk = 36
-        versionCode = 47
-        versionName = "5.1"
+        versionCode = 48
+        versionName = "5.2"
         buildConfigField("String", "NPU_MANIFEST_SHA256", "\"$npuCatalog\"")
         buildConfigField("String", "NPU_RELEASE_BASE", "\"https://github.com/123hurray/MiniCPM-V-Apps/releases/download/audio8-sm8550-int4-v1\"")
         ndk { abiFilters += "arm64-v8a" }
@@ -32,6 +32,7 @@ android {
     } }
 }
 dependencies {
+    implementation("com.google.ai.edge.litert:litert:2.2.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
     implementation("com.qualcomm.qti:onnxruntime-android-qnn:2.7.0")
     implementation("com.qualcomm.qti:qnn-runtime:2.51.0")
