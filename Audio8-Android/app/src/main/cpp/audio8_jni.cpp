@@ -42,18 +42,28 @@ void fail(JNIEnv* e,const std::exception& x) { if(!e->ExceptionCheck()) e->Throw
 struct Engine {
     std::unique_ptr<OnnxAr> ar;
     std::unique_ptr<OnnxCodec> codec;
+    std::string codecModels,codecLibraries,codecCache,codecError;
     audiocpp_registry* registry=nullptr;
     audiocpp_model* model=nullptr;
     audiocpp_session* session=nullptr;
     ~Engine(){ audiocpp_session_free(session); audiocpp_model_free(model); audiocpp_registry_free(registry); }
 };
 struct ExternalScope {
-    explicit ExternalScope(OnnxAr * ar,OnnxCodec * codec) {
-        audiocpp_audio8_external_codec(codec?OnnxCodec::decode:nullptr,codec?OnnxCodec::error:nullptr,codec);
-        audiocpp_audio8_external_forward(ar?OnnxAr::forward:nullptr,ar?OnnxAr::error:nullptr,ar);
+    explicit ExternalScope(Engine * h) {
+        audiocpp_audio8_external_codec(h->codecModels.empty()?nullptr:+[](void * user,const int32_t * codes,int64_t books,int64_t frames,const float ** out,int64_t * count) -> int {
+            auto * e=static_cast<Engine*>(user);
+            try {
+                if(!e->codec)e->codec=std::make_unique<OnnxCodec>(e->codecModels,e->codecLibraries,e->codecCache);
+                const int status=OnnxCodec::decode(e->codec.get(),codes,books,frames,out,count);
+                if(status)e->codecError=OnnxCodec::error(e->codec.get());
+                return status;
+            }catch(const std::exception & x){e->codecError=x.what();return -1;}
+        },+[](void * user)->const char * {return static_cast<Engine*>(user)->codecError.c_str();},h);
+        audiocpp_audio8_external_forward(h->ar?OnnxAr::forward:nullptr,h->ar?OnnxAr::error:nullptr,h->ar.get());
     }
-    ~ExternalScope() { audiocpp_audio8_external_codec(nullptr,nullptr,nullptr); audiocpp_audio8_external_forward(nullptr,nullptr,nullptr); }
+    ~ExternalScope() { audiocpp_audio8_external_codec(nullptr,nullptr,nullptr);audiocpp_audio8_external_forward(nullptr,nullptr,nullptr); }
 };
+struct CodecReleaseScope {Engine * engine;~CodecReleaseScope(){engine->codec.reset();}};
 struct AffinityScope {
     cpu_set_t previous{}; bool changed=false;
     explicit AffinityScope(bool enabled) {
@@ -99,8 +109,8 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         auto h=std::make_unique<Engine>();
         const std::string npu=utf8(e,npuModels);
         if(!npu.empty()) h->ar=std::make_unique<OnnxAr>(npu,utf8(e,libraries),utf8(e,cache),int(threads),int(fastThreads),bool(fastNpu));
-        if(codecModels && !utf8(e,codecModels).empty())h->codec=std::make_unique<OnnxCodec>(utf8(e,codecModels),utf8(e,libraries),utf8(e,cache)+"/preview01-codec-317c12d");
-        ExternalScope external(h->ar.get(),h->codec.get());
+        h->codecModels=utf8(e,codecModels);h->codecLibraries=utf8(e,libraries);h->codecCache=utf8(e,cache)+"/preview01-codec-317c12d";
+        ExternalScope external(h.get());
         check(audiocpp_registry_create(nullptr,&h->registry));
         audiocpp_model_config config{"audio8_tts",nullptr,nullptr,nullptr};
         audio8_stage("加载 GGUF 与音频 codec");
@@ -111,11 +121,15 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_example_audio8tts_NativeEngine_load(
         return reinterpret_cast<jlong>(h.release());
     } catch(const std::exception& x) { fail(e,x);return 0; }
 }
+extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_prepareCodec(JNIEnv* e,jclass,jlong handle,jint frames) {
+    try{auto * h=reinterpret_cast<Engine*>(handle);if(!h || h->codecModels.empty())throw std::runtime_error("NPU codec not enabled");OnnxCodec codec(h->codecModels,h->codecLibraries,h->codecCache);codec.prepare(frames);}catch(const std::exception & x){fail(e,x);}
+}
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_close(JNIEnv*,jclass,jlong handle) { delete reinterpret_cast<Engine*>(handle); }
 extern "C" JNIEXPORT void JNICALL Java_com_example_audio8tts_NativeEngine_synthesize(JNIEnv* e,jclass,jlong handle,jstring text,jstring ref,jstring transcript,jint rate,jint pitch,jboolean compact,jboolean graphs,jint threads,jint fastThreads,jint codecThreads,jboolean codecFast,jboolean affinity,jobject sink) {
     try {
         auto* h=reinterpret_cast<Engine*>(handle); if(!h) throw std::runtime_error("Model not loaded");
-        ExternalScope external(h->ar.get(),h->codec.get());
+        CodecReleaseScope release{h};
+        ExternalScope external(h);
         AffinityScope affinityScope(affinity);
         MobileScope mobile(e,sink,compact,graphs,std::clamp(int(threads),1,8),std::clamp(int(fastThreads),1,8),std::clamp(int(codecThreads),1,8),bool(codecFast));
         std::unique_ptr<audiocpp_request,decltype(&audiocpp_request_free)> request(audiocpp_request_create(),audiocpp_request_free);

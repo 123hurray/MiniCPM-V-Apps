@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         ScrollView scroll = new ScrollView(this); LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setPadding(32,48,32,32); scroll.addView(root); setContentView(scroll);
-        TextView title = new TextView(this); title.setText("Audio8 · 4.9"); title.setTextSize(26); root.addView(title);
+        TextView title = new TextView(this); title.setText("Audio8 · 5.0"); title.setTextSize(26); root.addView(title);
         TextView note = new TextView(this);
         note.setText("Audio8-TTS-Preview-0.1B Q8 · CPU · SoC="+Build.SOC_MODEL+"\n模型约 851 MB，从 GitHub Release 下载，不在 APK 中。旧 0.6B 文件保留，不会覆盖。\nAR 使用 CPU；codec 可选 NPU 实验路径。仅通过 x86 CPU 基础测试；手机端音质、速度待验证。\n使用 Audio8 Community License v1.0，详见模型发布页。仍整段生成后播放，建议默认语速和音调。"); root.addView(note);
         status = new TextView(this); status.setText(ModelStore.ready(this) ? "模型已就绪" : "模型未下载"); root.addView(status);
@@ -40,15 +40,17 @@ public final class MainActivity extends Activity {
         CheckBox cache = option(root,"重复文本内存音频缓存（最多 16 MiB，不落盘）",perf.cache);
         CheckBox npu = option(root,"Preview 0.1B 暂不支持 NPU",false); npu.setEnabled(false);
         CheckBox fastNpu = option(root,"Fast AR 使用 CPU",false); fastNpu.setEnabled(false);
-        CheckBox codecNpu=option(root,"实验：仅 codec 使用 NPU（AR 保持 CPU；失败不回退）",perf.codecNpu);
+        CheckBox codecNpu=option(root,"仅 codec 使用 NPU（保留已保存的选择）",perf.codecNpu);
         button(root,"保存 codec 后端",() -> {
             try {CodecModelStore.enable(this,codecNpu.isChecked());message("已保存，下次请求重载；请先下载 codec 模型");}
             catch(Exception e){message(e.getMessage());}
         });
-        TextView codecNote=new TextView(this);codecNote.setText("实验 FP16 codec 约 261 MB，默认 HF-Mirror；未验证 SM8550 编译及音质。按实际帧长编译，首次可能较慢。短句先测试，关闭此选项可恢复 CPU。原有 NPU AR 模型不适用。");root.addView(codecNote);
+        TextView codecNote=new TextView(this);codecNote.setText("先下载 codec 模型，再单独准备 NPU 图。准备与试听分开，按 128/256 帧容量复用；容量尾部补码，PCM 仅取真实长度，不拆句。因果前缀性质尚需真机对照验证。首次准备可能较慢，推理不再自动编译。");root.addView(codecNote);
         button(root,"下载 / 续传 codec ONNX 模型",() -> worker.execute(() -> {try{CodecModelStore.download(this,this::message);}catch(Exception e){message("codec 下载失败："+e.getMessage());}}));
         button(root,"codec 下载使用 HF 官方",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.OFFICIAL);message("codec 已切换至 HF 官方");}catch(Exception e){message(e.getMessage());}});
         button(root,"codec 下载使用 HF-Mirror",() -> {try{ModelStore.saveEndpoint(this,DownloadEndpoint.MIRROR);message("codec 已切换至 HF-Mirror");}catch(Exception e){message(e.getMessage());}});
+        button(root,"准备 NPU codec · 128 帧（约 5.9 秒音频）",() -> prepareCodec(128));
+        button(root,"准备 NPU codec · 256 帧（约 11.9 秒音频）",() -> prepareCodec(256));
         TextView threadLabels = new TextView(this);threadLabels.setText("前两个输入：CPU 主干/预填充、Fast AR 的线程数；codec 在下方单独设置。它们不是 NPU 核心数。");root.addView(threadLabels);
         EditText threads = new EditText(this); threads.setHint("主干 / 预填充线程数 1～8"); threads.setInputType(2); threads.setText(""+perf.threads); root.addView(threads);
         EditText fastThreads = new EditText(this); fastThreads.setHint("小型 Fast AR 线程数 1～8"); fastThreads.setInputType(2); fastThreads.setText(""+perf.fastThreads); root.addView(fastThreads);
@@ -120,8 +122,8 @@ public final class MainActivity extends Activity {
             if (!ttsReady) message("引擎未初始化；先下载模型，再重新打开应用");
         },getPackageName());
         tts.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener() {
-            public void onStart(String id) { message("正在合成 / 播放…"); }
-            public void onDone(String id) { message("试听结束"); }
+            public void onStart(String id) { message(id.equals("prepare-codec")?"正在准备 NPU codec 图…":"正在合成 / 播放…"); }
+            public void onDone(String id) { message(id.equals("prepare-codec")?"NPU codec 图已准备，可以试听":"试听结束"); }
             @Deprecated public void onError(String id) { message("合成失败，请导出诊断"); }
             public void onError(String id,int code) { message("合成失败，错误码=" + code + "；请导出诊断"); }
         });
@@ -159,6 +161,14 @@ public final class MainActivity extends Activity {
             ui.postDelayed(this,1000);
         }});
     }
+    private void prepareCodec(int frames) {
+        if(!ttsReady){message("系统引擎初始化中，请稍后重试");return;}
+        message("准备 NPU codec 图；此操作不生成语音，请观察阶段与耗时");
+        speechWorker.execute(() -> {
+            Bundle params=new Bundle();params.putInt("com.example.audio8tts.prepare_codec_frames",frames);
+            tts.speak("准备 NPU codec",TextToSpeech.QUEUE_FLUSH,params,"prepare-codec");
+        });
+    }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
@@ -169,7 +179,7 @@ public final class MainActivity extends Activity {
                 if (request == 2) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out == null) throw new IOException("无法写入诊断");
-                        out.write(("Audio8 4.9 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(("Audio8 5.0 " + Build.MANUFACTURER + " " + Build.MODEL + " SoC="+Build.SOC_MODEL+" SDK=" + Build.VERSION.SDK_INT + " config="+new PerformanceSettings(this).engineKey()+" catalog="+BuildConfig.NPU_MANIFEST_SHA256+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         for (String name : new String[]{"diagnostics.txt","diagnostics-native.txt","service-status.txt","native-status.txt"}) {
                             File f = new File(ModelStore.dir(this),name);
                             if (f.exists()) try (InputStream in = new FileInputStream(f)) { in.transferTo(out); }

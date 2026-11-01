@@ -8,9 +8,9 @@ import java.security.MessageDigest;
 
 final class CodecModelStore {
     static final String REVISION="317c12d4e0da83847b594fcf8bd74bf2c76615ec";
-    private static final String[] NAMES={"codec_decoder_fp16.onnx","codec_decoder_fp16.onnx.data"};
-    private static final long[] SIZES={594319L,260741440L};
-    private static final String[] HASHES={"25379b866ad555b9a55226c46325344d2ebfafea1b474c29de5223a9d01ea533","b9bc968a84f41b86a9a3d19bc6c42b00b5de576512a87501d0c66ff7f896c954"};
+    private static final String[] NAMES={"codec-static-128.onnx","codec-static-256.onnx","codec_decoder_fp16.onnx.data"};
+    private static final long[] SIZES={506620L,506620L,260741440L};
+    private static final String[] HASHES={"470953b43ef44c5507d63dcca7082233c13867af556772355fb6b77b2bef4305","9474a6e7cef058b6858170a1e0bb64d51e22e041cf0c7ad1b9688152fdcec27e","b9bc968a84f41b86a9a3d19bc6c42b00b5de576512a87501d0c66ff7f896c954"};
     static File dir(Context c){File f=new File(ModelStore.dir(c),"codec-preview01-317c12d");f.mkdirs();return f;}
     static boolean enabled(Context c){try{return ModelStore.text(new File(ModelStore.dir(c),"codec-npu.txt")).equals("true");}catch(IOException e){return false;}}
     static void enable(Context c,boolean value)throws IOException{ModelStore.saveText(new File(ModelStore.dir(c),"codec-npu.txt"),Boolean.toString(value));}
@@ -32,7 +32,7 @@ final class CodecModelStore {
             if(target.length()==SIZES[i] && hash(target).equals(HASHES[i]))continue;
             long offset=part.length();if(offset>SIZES[i])throw new IOException("codec 临时文件超长");
             if(offset<SIZES[i]){
-                String url=ModelStore.endpoint(c)+"/Edge0/audio8-TTS-0.1B-ONNX-INT8/resolve/"+REVISION+"/"+NAMES[i];
+                String url=NAMES[i].endsWith(".data") ? ModelStore.endpoint(c)+"/Edge0/audio8-TTS-0.1B-ONNX-INT8/resolve/"+REVISION+"/"+NAMES[i] : "https://github.com/123hurray/MiniCPM-V-Apps/releases/download/audio8-android-v5.0/"+NAMES[i];
                 var conn=(HttpURLConnection)new URL(url).openConnection();
                 conn.setConnectTimeout(30000);conn.setReadTimeout(60000);conn.setRequestProperty("Accept-Encoding","identity");
                 if(offset>0)conn.setRequestProperty("Range","bytes="+offset+"-");

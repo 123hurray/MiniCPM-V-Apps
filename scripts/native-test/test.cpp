@@ -1,6 +1,7 @@
 #include "engine/community_models/audio8_tts/mobile_math.h"
 #include "engine/community_models/audio8_tts/mobile.h"
 #include "engine/community_models/audio8_tts/mobile_codec.h"
+#include "engine/community_models/audio8_tts/mobile_threadpool.h"
 #include <ggml-backend.h>
 #include <ggml-alloc.h>
 #include <ggml-cpu.h>
@@ -89,8 +90,36 @@ void codec_test(int threads,int channels,int outputs,int frames,int kernel,int s
     std::printf("codec parity threads=%d C=%d O=%d T=%d K=%d S=%d max_error=%.8g\n",threads,channels,outputs,frames,kernel,stride,maximum);
     ggml_backend_buffer_free(buffer);ggml_backend_free(backend);ggml_free(ctx);
 }
+void threadpool_test() {
+    auto * ctx=ggml_init({1024*1024,nullptr,true});auto backend=ggml_backend_cpu_init();
+    auto * x=ggml_new_tensor_1d(ctx,GGML_TYPE_F32,4096);auto * y=ggml_silu(ctx,x);
+    auto * graph=ggml_new_graph_custom(ctx,64,false);ggml_build_forward_expand(graph,y);
+    auto buffer=ggml_backend_alloc_ctx_tensors(ctx,backend);require(buffer!=nullptr,"pool test allocation");
+    std::vector<float> input(4096),baseline(4096),actual(4096);
+    for(size_t i=0;i<input.size();++i)input[i]=std::sin(float(i))*2;
+    ggml_backend_tensor_set(x,input.data(),0,input.size()*sizeof(float));
+    ggml_backend_cpu_set_n_threads(backend,1);
+    require(ggml_backend_graph_compute(backend,graph)==GGML_STATUS_SUCCESS,"pool baseline");
+    ggml_backend_tensor_get(y,baseline.data(),0,baseline.size()*sizeof(float));
+    for(int repeat=0;repeat<3;++repeat) {
+        try {
+            MobileThreadpoolScope scope(backend,backend);
+            for(int n:{5,2,1,5}) {
+                ggml_backend_cpu_set_n_threads(backend,n);
+                require(ggml_backend_graph_compute(backend,graph)==GGML_STATUS_SUCCESS,"pooled compute");
+                ggml_backend_tensor_get(y,actual.data(),0,actual.size()*sizeof(float));
+                require(actual==baseline,"pool changes numerical output");
+            }
+            if(repeat==1)throw std::runtime_error("exercise exception teardown");
+        }catch(const std::runtime_error & e){if(std::strcmp(e.what(),"exercise exception teardown")!=0)throw;}
+        require(ggml_backend_graph_compute(backend,graph)==GGML_STATUS_SUCCESS,"compute after pool detach");
+    }
+    ggml_backend_buffer_free(buffer);ggml_backend_free(backend);ggml_free(ctx);
+    std::puts("threadpool numerical parity, changing thread counts and exception teardown passed");
+}
 int main() {
     try {
+        threadpool_test();
         run(GGML_TYPE_F32,1); run(GGML_TYPE_Q8_0,1);
         run(GGML_TYPE_F32,4); run(GGML_TYPE_Q8_0,4);
         for(int threads:{1,5})for(int stride:{2,4,8}) {

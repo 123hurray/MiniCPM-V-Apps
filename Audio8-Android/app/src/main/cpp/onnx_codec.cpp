@@ -4,6 +4,7 @@
 #include "runtime_status.h"
 #include <onnxruntime_cxx_api.h>
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -36,7 +37,7 @@ struct OnnxCodec::Impl {
         if(devices.empty())throw std::runtime_error("Codec QNN NPU unavailable; CPU fallback disabled");
         std::filesystem::create_directories(cache);
     }
-    void prepare(int64_t frames) {
+    void prepare(int64_t frames,bool allow_compile=false) {
         if(session && session_frames==frames)return;
         session.reset();session_frames=0;
         Ort::SessionOptions options;options.SetIntraOpNumThreads(1);options.SetInterOpNumThreads(1);
@@ -46,42 +47,40 @@ struct OnnxCodec::Impl {
         Ort::ThrowOnError(Ort::GetApi().AddFreeDimensionOverrideByName(options,"frames",frames));
         Ort::ThrowOnError(Ort::GetApi().AddFreeDimensionOverrideByName(options,"samples",frames*2048));
         // Exact-length graphs preserve attention and boundary behavior; no padded frames or independent chunks.
-        const auto context=cache+"/codec-f"+std::to_string(frames)+"-qnn251-v1.onnx";
+        const auto context=cache+"/codec-f"+std::to_string(frames)+"-qnn251-bucket-v2.onnx";
         bool cached=std::filesystem::is_regular_file(context);
+        if(!cached && !allow_compile)throw std::runtime_error("请先单独准备 NPU codec 图；当前语音请求不执行编译");
         if(!cached){options.AddConfigEntry("ep.context_enable","1");options.AddConfigEntry("ep.context_embed_mode","1");options.AddConfigEntry("ep.context_file_path",context.c_str());}
         std::unordered_map<std::string,std::string> config={
             {"backend_path",libraries+"/libQnnHtp.so"},{"soc_model","43"},{"htp_arch","73"},
             {"enable_htp_fp16_precision","1"},{"htp_performance_mode","sustained_high_performance"},
-            {"htp_graph_finalization_optimization_mode","3"},
+            {"htp_graph_finalization_optimization_mode","0"},
             {"profiling_level","basic"},{"profiling_file_path",cache+"/codec-qnn.csv"}};
         options.AppendExecutionProvider_V2(env,devices,config);
         audio8_stage(cached?"加载 codec NPU 缓存":"编译 codec NPU 图（实验）");auto start=Clock::now();
-        try {session=std::make_unique<Ort::Session>(env,(cached?context:model+"/codec_decoder_fp16.onnx").c_str(),options);}
+        try {session=std::make_unique<Ort::Session>(env,(cached?context:model+"/codec-static-"+std::to_string(frames)+".onnx").c_str(),options);}
         catch(...){if(cached){std::error_code ec;std::filesystem::remove(context,ec);}throw;}
         if(session->GetInputCount()!=1 || session->GetOutputCount()!=1)throw std::runtime_error("Codec I/O count mismatch");
         Ort::AllocatorWithDefaultOptions allocator;
         if(std::string(session->GetInputNameAllocated(0,allocator).get())!="codes" || std::string(session->GetOutputNameAllocated(0,allocator).get())!="audio")throw std::runtime_error("Codec I/O names mismatch");
         session_frames=frames;
-        // Bound context storage: retain only the most recent exact-length graph.
-        for(auto & entry:std::filesystem::directory_iterator(cache)) {
-            auto name=entry.path().filename().string();
-            if(name.rfind("codec-f",0)==0 && entry.path()!=context){std::error_code ec;std::filesystem::remove(entry.path(),ec);}
-        }
-        std::fprintf(stderr,"Audio8 codec NPU prepare_ms=%.2f frames=%lld context_hit=%d strict_no_cpu_fallback=1 precision=fp16_attempt\n",ms(start),(long long)frames,cached);
+        std::fprintf(stderr,"Audio8 codec NPU prepare_ms=%.2f frames=%lld context_hit=%d strict_no_cpu_fallback=1 precision=fp16_attempt bucketed_causal_prefix=1\n",ms(start),(long long)frames,cached);
     }
     void run(const int32_t * codes,int64_t books,int64_t frames,const float ** out,int64_t * count) {
-        if(!codes || books!=10 || frames<1 || frames>4096)throw std::runtime_error("Codec codes shape out of bounds");
-        auto total=Clock::now();prepare(frames);auto copy=Clock::now();
-        input.assign(codes,codes+books*frames);
+        if(!codes || books!=10 || frames<1 || frames>256)throw std::runtime_error("Codec codes shape out of bounds");
+        auto total=Clock::now();const int64_t capacity=frames<=128?128:256;
+        prepare(capacity);auto copy=Clock::now();
+        input.assign(books*capacity,0);
+        for(int64_t book=0;book<books;++book)std::copy_n(codes+book*frames,frames,input.data()+book*capacity);
         for(auto value:input)if(value<0 || value>=4096)throw std::runtime_error("Codec code outside vocabulary");
-        std::array<int64_t,3> dims{1,books,frames};
+        std::array<int64_t,3> dims{1,books,capacity};
         auto memory=Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,OrtMemTypeDefault);
         auto tensor=Ort::Value::CreateTensor<int64_t>(memory,input.data(),input.size(),dims.data(),dims.size());
         double input_ms=ms(copy);const char * in="codes",*output="audio";
         audio8_stage("解码音频 · NPU codec");auto start=Clock::now();
         auto values=session->Run(Ort::RunOptions{nullptr},&in,&tensor,1,&output,1);double run_ms=ms(start);start=Clock::now();
         auto info=values.at(0).GetTensorTypeAndShapeInfo();
-        if(info.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || info.GetShape()!=std::vector<int64_t>{1,1,frames*2048})throw std::runtime_error("Codec PCM shape or dtype mismatch");
+        if(info.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || info.GetShape()!=std::vector<int64_t>{1,1,capacity*2048})throw std::runtime_error("Codec PCM shape or dtype mismatch");
         const float * data=values[0].GetTensorData<float>();pcm.assign(data,data+frames*2048);
         for(float value:pcm)if(!std::isfinite(value))throw std::runtime_error("Non-finite NPU codec output");
         *out=pcm.data();*count=pcm.size();
@@ -90,5 +89,6 @@ struct OnnxCodec::Impl {
 };
 OnnxCodec::OnnxCodec(const std::string & m,const std::string & l,const std::string & c):impl(std::make_unique<Impl>(m,l,c)){}
 OnnxCodec::~OnnxCodec()=default;
+void OnnxCodec::prepare(int64_t frames){if(frames!=128 && frames!=256)throw std::runtime_error("Invalid codec capacity");impl->prepare(frames,true);}
 int OnnxCodec::decode(void * p,const int32_t * c,int64_t b,int64_t f,const float ** o,int64_t * n){auto & self=*static_cast<OnnxCodec*>(p)->impl;try{self.run(c,b,f,o,n);return 0;}catch(const std::exception & e){self.last_error=e.what();std::fprintf(stderr,"Audio8 codec NPU failed: %s\n",e.what());return -1;}}
 const char * OnnxCodec::error(void * p){return static_cast<OnnxCodec*>(p)->impl->last_error.c_str();}

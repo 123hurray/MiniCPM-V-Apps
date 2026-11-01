@@ -1,5 +1,42 @@
 # Audio8 Android system TTS
 
+## Version 5.0 — separate NPU preparation and improve Falcon AR scheduling
+
+Pure ONNX reference constant folding freezes 128/256-frame graphs and reduces
+3341 nodes to 1646. Two pinned static headers are published with the APK; the
+original external weight file is reused without redownloading. No ORT/QNN host
+inference is used to build them.
+
+The device log showed 1.12 s loading, 23.89 s AR and at least 109 s blocked in
+request-time QNN session creation. NPU choice is retained, with no CPU fallback.
+Download the codec, enable/save codec NPU, then explicitly prepare 128 or 256-frame
+graphs before preview. Preparation has its own 240 s process watchdog. Synthesis
+uses prepared contexts only and fails quickly on a cache miss. Graph finalization
+uses mode 0 instead of mode 3 to prioritize preparation time; actual inference
+performance must be measured. Two capacity contexts are retained, not evicted at
+every different utterance length. Longer than 256 frames fails explicitly.
+
+Codebooks are right-padded to capacity and PCM cropped to real frame length.
+The pinned source has causal window attention, causal convolutions and per-feature
+normalization; future padding should preserve the output prefix. This is an
+architectural inference, not completed full-model numeric/audio validation.
+No independent utterance splitting or overlapping-audio approximation is used.
+Do not claim successful NPU execution or measured speedup from a cloud build.
+
+v4.9 initialized QNN before AR. v5.0 defers it until codec decode and releases
+it afterwards; explicit preparation also releases its runtime on completion.
+This isolates AR from idle provider threads/resources; cached contexts are reloaded
+at codec time, whose overhead is logged. This is a suspected interference fix,
+not an established cause without an on-device A/B test.
+
+AR has request-scoped ggml threadpool reuse (idle workers park), correct active
+slow-thread controls in the Falcon branch, cancellation at every prompt/generated
+token, progress and separated prefill/decode/compute/build/allocation/copy timings.
+The old slow_ms=0 omitted Falcon computation. v4.8 and v4.9 used the same Falcon
+math path; the log alone cannot establish a regression against a previous run.
+CI checks pool numerical parity, thread-count changes and exception teardown.
+Version code 46 retains the signing certificate. Device parity and latency pending.
+
 ## Version 4.9 — opt-in codec-only QNN experiment
 
 AR remains CPU. In advanced settings download the separate pinned 261 MB official

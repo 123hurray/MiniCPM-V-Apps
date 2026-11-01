@@ -107,6 +107,19 @@ public final class Audio8Service extends TextToSpeechService {
                 releaseIfTrimRequested();
                 if (!modelsReady()) { callback.error(TextToSpeech.ERROR_NOT_INSTALLED_YET); return; }
                 if (onIsLanguageAvailable(request.getLanguage(),request.getCountry(),request.getVariant())<0) { callback.error(TextToSpeech.ERROR_INVALID_REQUEST); return; }
+                int prepare=request.getParams().getInt("com.example.audio8tts.prepare_codec_frames",0);
+                if(prepare!=0) {
+                    if(prepare!=128 && prepare!=256)throw new IllegalArgumentException("不支持的 codec 容量");
+                    PerformanceSettings settings=new PerformanceSettings(this);
+                    if(!settings.codecNpu)throw new IllegalStateException("请先启用并保存 codec NPU");
+                    ensureEngine(settings);
+                    if(callback.start(44100,AudioFormat.ENCODING_PCM_16BIT,1)!=TextToSpeech.SUCCESS)return;
+                    ModelStore.log(this,"codec_prepare_begin capacity="+prepare);
+                    armWatchdog(240,"NPU codec 准备超时");
+                    NativeEngine.prepareCodec(engine,prepare);disarmWatchdog();
+                    callback.done();RuntimeStatus.write(this,"NPU codec 图已准备，接下来可试听");
+                    ModelStore.log(this,"codec_prepare_done capacity="+prepare+" total_ms="+(SystemClock.elapsedRealtime()-start));return;
+                }
                 String text=request.getCharSequenceText().toString().strip();
                 if (text.isEmpty() || text.codePointCount(0,text.length())>500) { callback.error(TextToSpeech.ERROR_INVALID_REQUEST); return; }
                 PerformanceSettings s=new PerformanceSettings(this);
